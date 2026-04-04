@@ -1,0 +1,28 @@
+{
+  "projectName": "ELLISON INSTITUTE OF TECHNOLOGY PROJECT,\nARMSTRONG ROAD, LITTLEMORE, OXFORD, OX4 4XY",
+  "projectNumber": "24-354",
+  "clientName": "LAING O ROURKE",
+  "designerName": "F&P",
+  "preliminaryRevisionFormat": "P01",
+  "approvedRevisionFormat": "ABC",
+  "expectedIssuedFor": "S4",
+  "requiredFields": {
+    "projectName": false,
+    "projectNumber": false,
+    "drawingTitle": false,
+    "drawingNumber": true,
+    "revision": true,
+    "scale": true,
+    "paperSize": true,
+    "author": true,
+    "checker": true,
+    "issueDate": true,
+    "clientName": true,
+    "suffixNumber": true,
+    "issuedFor": false,
+    "status": false,
+    "statusBy": false,
+    "statusDate": false,
+    "revisionHistory": true
+  }
+}

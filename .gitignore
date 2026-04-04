@@ -1,0 +1,10 @@
+node_modules/
+client/node_modules/
+.env
+server/.env
+server/uploads/
+dist/
+client/dist/
+*.log
+nul
+.claude/settings.local.json
