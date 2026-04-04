@@ -1,8 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
@@ -16,64 +14,10 @@ console.log(`  NOTION_FINISHES_DB_ID: ${process.env.NOTION_FINISHES_DB_ID ? 'SET
 console.log('=========================');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Configure multer for PDF uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}-${file.originalname}`;
-    cb(null, uniqueName);
-  },
-});
-
-const upload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PDF files are allowed'));
-    }
-  },
-  limits: { fileSize: 50 * 1024 * 1024 },
-});
-
-// ── Upload endpoint ──
-app.post('/api/upload', upload.single('pdf'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
-
-  const fileSizeMB = (req.file.size / 1024 / 1024).toFixed(2);
-  console.log(`[Upload] File received: "${req.file.originalname}" (${fileSizeMB}MB)`);
-  console.log(`  Saved as: "${req.file.filename}"`);
-
-  res.json({
-    filename: req.file.filename,
-    originalName: req.file.originalname,
-    size: req.file.size,
-  });
-});
-
-// ── Serve uploaded files ──
-app.get('/uploads/:filename', (req, res) => {
-  const filePath = path.join(uploadsDir, req.params.filename);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'File not found' });
-  }
-  res.setHeader('Content-Type', 'application/pdf');
-  res.sendFile(filePath);
-});
 
 // ── Finishes database lookup by suffix number ──
 app.post('/api/finishes-lookup', async (req, res) => {
@@ -490,6 +434,10 @@ app.post('/api/notion-drawings-for-project', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

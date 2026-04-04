@@ -559,23 +559,14 @@ function App() {
     for (const file of fileArray) {
       const entryId = makeId();
       try {
-        const formData = new FormData();
-        formData.append('pdf', file);
-        const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
-        if (!uploadRes.ok) {
-          const errText = await uploadRes.text().catch(() => '');
-          throw new Error(`Server returned HTTP ${uploadRes.status}${errText ? ': ' + errText.slice(0, 200) : ''}`);
-        }
-        const uploadData = await uploadRes.json();
-        if (uploadData.splitError) throw new Error(uploadData.splitError);
-
-        const loadedPdf = await pdfjsLib.getDocument(`/uploads/${uploadData.filename}`).promise;
+        const objectUrl = URL.createObjectURL(file);
+        const loadedPdf = await pdfjsLib.getDocument(objectUrl).promise;
         uploadedFilesRef.current.set(entryId, file);
 
         newEntries.push({
           id: entryId,
-          displayName: uploadData.originalName,
-          serverFilename: uploadData.filename,
+          displayName: file.name,
+          serverFilename: file.name,
           pdfDoc: loadedPdf,
           totalPages: loadedPdf.numPages,
           checked: true,

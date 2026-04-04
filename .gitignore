@@ -8,3 +8,4 @@ client/dist/
 *.log
 nul
 .claude/settings.local.json
+.netlify/
