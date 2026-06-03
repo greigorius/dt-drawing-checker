@@ -6,10 +6,4 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
-  status = 200
-
-[build.environment]
-  NODE_VERSION = "18"
+# ── API redirects → individual Netlify functions ─────────────────────────────�
