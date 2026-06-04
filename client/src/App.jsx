@@ -4,7 +4,6 @@ import { getSectionSummary } from './validationRules';
 import { DEFAULT_CHECK_OPTIONS, loadCheckOptions, saveCheckOptions } from './settingsDefaults';
 import PdfViewer from './PdfViewer';
 import ExportSection from './ExportModal';
-import LoadPendingModal from './LoadPendingModal.jsx';
 import './App.css';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -92,7 +91,7 @@ function App() {
   const [pdfs, setPdfs] = useState([]);
   const [selectedPdfId, setSelectedPdfId] = useState(null);
   const [selectedPage, setSelectedPage] = useState(0);
-  const [showLoadPending, setShowLoadPending] = useState(false);
+  const [loadingPending, setLoadingPending] = useState(false);
 
   // ── Notion projects (loaded on mount for project dropdown) ──
   const [notionProjects, setNotionProjects] = useState(null);
@@ -761,87 +760,117 @@ function App() {
   };
 
   // ── Load Pending: called by LoadPendingModal when a submission PDF is loaded ──
-  const handleLoadSubmission = useCallback(async ({ sub, pdfDoc, filename, filePath }) => {
-    const entryId = makeId();
-    const entry = {
-      id: entryId, displayName: filename, serverFilename: filename,
-      pdfDoc, totalPages: pdfDoc.numPages,
-      checked: true, expanded: true, status: 'uploaded',
-      submissionId: sub.id,
-      filePath,
-      finishesRows: null, finishesError: null,
-      manualProject: null, availableProjectDrawings: null,
-      projectDrawingsLoading: false, notionRefreshing: false,
-      manualSelections: [], revisionTableDates: {}, customFields: {},
-    };
-    setPdfs(prev => [...prev, entry]);
-    setSelectedPdfId(prev => prev || entryId);
-    setSelectedPage(0);
-
-    // Auto-match: fetch projects fresh then run match
-    let projects = notionProjects;
-    if (!projects) {
-      try {
-        const pr = await fetch('/api/notion-all-projects');
-        projects = (await pr.json()).projects || [];
-        setNotionProjects(prev => prev ?? projects);
-      } catch { projects = []; }
-    }
-
-    // Inline auto-match using submission metadata (faster than filename parse)
-    const projectNo = sub.taskCode?.split('-').slice(0, 2).join('-');
-    const project   = (projects || []).find(p =>
-      (p.projectNumber && p.projectNumber.includes(projectNo)) ||
-      (p.projectName   && p.projectName.startsWith(projectNo))
-    );
-    if (!project) return;
-    setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, manualProject: project }));
+  // ── Load all pending submissions from ADF in one click ───────────────────────
+  const loadAllPending = useCallback(async () => {
+    if (loadingPending) return;
+    setLoadingPending(true);
 
     try {
-      const suffRes  = await fetch('/api/notion-suffixes-for-project', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectName: project.projectName }),
-      });
-      const { suffixes = [] } = await suffRes.json();
-      const itemNo  = sub.taskCode?.split('-')[2] || '';
-      const padded  = itemNo.padStart(3, '0');
-      const suffix  = suffixes.find(s => s.suffixNumber === padded || s.suffixNumber === itemNo);
-      if (!suffix) return;
+      // 1. Fetch submission list
+      const subRes = await fetch('/api/df-submissions');
+      if (!subRes.ok) throw new Error(`df-submissions: ${subRes.status}`);
+      const { submissions = [] } = await subRes.json();
+      if (!submissions.length) { setLoadingPending(false); return; }
 
-      setPdfs(prev => prev.map(p => {
-        if (p.id !== entryId) return p;
-        const sel = [...(p.manualSelections || [])];
-        sel[0] = { ...(sel[0] || {}), suffixNumber: suffix.suffixNumber, itemPageId: suffix.itemPageId, drawingNumber: null, notionRow: null, issuedFor: sub.stage || null };
-        return { ...p, manualSelections: sel };
-      }));
+      // 2. Fetch Notion projects once
+      let projects = notionProjects;
+      if (!projects) {
+        try {
+          const pr = await fetch('/api/notion-all-projects');
+          projects = (await pr.json()).projects || [];
+          setNotionProjects(prev => prev ?? projects);
+        } catch { projects = []; }
+      }
 
-      const drawRes = await fetch('/api/notion-drawings-for-project', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemPageId: suffix.itemPageId }),
-      });
-      const { rows = [] } = await drawRes.json();
-      setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, availableProjectDrawings: rows }));
+      let firstId = null;
 
-      const drawing = rows.find(r => r.drawingNumber?.toLowerCase() === sub.drawingNo?.toLowerCase());
-      if (!drawing) return;
-      setPdfs(prev => prev.map(p => {
-        if (p.id !== entryId) return p;
-        const sel = [...(p.manualSelections || [])];
-        sel[0] = { ...(sel[0] || {}), drawingNumber: drawing.drawingNumber, notionRow: drawing };
-        return { ...p, manualSelections: sel };
-      }));
+      for (const sub of submissions) {
+        if (!sub.dropboxPath) continue;
+        try {
+          // 3. Fetch PDF from local Dropbox
+          const pdfRes = await fetch(`/api/local-pdf?path=${encodeURIComponent(sub.dropboxPath)}`);
+          if (!pdfRes.ok) { console.warn(`[load-pending] ${sub.title}: ${pdfRes.status}`); continue; }
 
-      // Load finishes
-      fetch('/api/finishes-lookup', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ suffixNumber: suffix.suffixNumber, projectPageId: project.pageId }),
-      }).then(r => r.json()).then(({ rows: fr }) => {
-        setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, finishesRows: fr || [] }));
-      }).catch(() => {});
+          const blob      = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
+          const objectUrl = URL.createObjectURL(blob);
+          const loadedPdf = await pdfjsLib.getDocument(objectUrl).promise;
+          const filename  = sub.dropboxPath.split('/').pop();
+          const entryId   = makeId();
+          if (!firstId) firstId = entryId;
+
+          const entry = {
+            id: entryId, displayName: filename, serverFilename: filename,
+            pdfDoc: loadedPdf, totalPages: loadedPdf.numPages,
+            checked: true, expanded: true, status: 'uploaded',
+            submissionId: sub.id, filePath: null,
+            finishesRows: null, finishesError: null,
+            manualProject: null, availableProjectDrawings: null,
+            projectDrawingsLoading: false, notionRefreshing: false,
+            manualSelections: [], revisionTableDates: {}, customFields: {},
+          };
+          setPdfs(prev => [...prev, entry]);
+          setSelectedPdfId(prev => prev || entryId);
+          setSelectedPage(0);
+
+          // 4. Auto-match Notion data from submission metadata
+          const projectNo = sub.taskCode?.split('-').slice(0, 2).join('-');
+          const project   = (projects || []).find(p =>
+            (p.projectNumber && p.projectNumber.includes(projectNo)) ||
+            (p.projectName   && p.projectName.startsWith(projectNo))
+          );
+          if (!project) continue;
+          setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, manualProject: project }));
+
+          const { suffixes = [] } = await fetch('/api/notion-suffixes-for-project', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectName: project.projectName }),
+          }).then(r => r.json()).catch(() => ({ suffixes: [] }));
+
+          const itemNo = sub.taskCode?.split('-')[2] || '';
+          const suffix = suffixes.find(s => s.suffixNumber === itemNo.padStart(3, '0') || s.suffixNumber === itemNo);
+          if (!suffix) continue;
+
+          setPdfs(prev => prev.map(p => {
+            if (p.id !== entryId) return p;
+            const sel = [...(p.manualSelections || [])];
+            sel[0] = { ...(sel[0] || {}), suffixNumber: suffix.suffixNumber, itemPageId: suffix.itemPageId, drawingNumber: null, notionRow: null, issuedFor: sub.stage || null };
+            return { ...p, manualSelections: sel };
+          }));
+
+          const { rows = [] } = await fetch('/api/notion-drawings-for-project', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemPageId: suffix.itemPageId }),
+          }).then(r => r.json()).catch(() => ({ rows: [] }));
+
+          setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, availableProjectDrawings: rows }));
+
+          const drawing = rows.find(r => r.drawingNumber?.toLowerCase() === sub.drawingNo?.toLowerCase());
+          if (drawing) {
+            setPdfs(prev => prev.map(p => {
+              if (p.id !== entryId) return p;
+              const sel = [...(p.manualSelections || [])];
+              sel[0] = { ...(sel[0] || {}), drawingNumber: drawing.drawingNumber, notionRow: drawing };
+              return { ...p, manualSelections: sel };
+            }));
+          }
+
+          fetch('/api/finishes-lookup', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ suffixNumber: suffix.suffixNumber, projectPageId: project.pageId }),
+          }).then(r => r.json()).then(({ rows: fr }) => {
+            setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, finishesRows: fr || [] }));
+          }).catch(() => {});
+
+        } catch (err) {
+          console.warn(`[load-pending] ${sub.title}:`, err.message);
+        }
+      }
     } catch (err) {
-      console.warn('[handleLoadSubmission]', err.message);
+      console.error('[load-pending]', err.message);
+    } finally {
+      setLoadingPending(false);
     }
-  }, [notionProjects]);
+  }, [loadingPending, notionProjects]);
 
   // ── PDF list helpers ──
 
@@ -1089,7 +1118,9 @@ function App() {
               <div className="pagelist-header">
                 <span className="pagelist-title">Drawings</span>
                 <div className="pagelist-header-actions">
-                  <button className="btn btn-small btn-pending" onClick={() => setShowLoadPending(true)} title="Load pending submissions from Axiom Drawing Flow">Pending</button>
+                  <button className="btn btn-small btn-pending" onClick={loadAllPending} disabled={loadingPending} title="Load all pending submissions from Axiom Drawing Flow">
+                    {loadingPending ? '…' : 'Pending'}
+                  </button>
                   <button className="btn btn-small" onClick={addMoreFiles}>Add</button>
                   <button className="btn btn-small" onClick={resetAll}>Clear All</button>
                 </div>
@@ -1531,12 +1562,6 @@ function App() {
         </section>
       </main>
 
-      {showLoadPending && (
-        <LoadPendingModal
-          onClose={() => setShowLoadPending(false)}
-          onLoadSubmission={async (args) => { await handleLoadSubmission(args); }}
-        />
-      )}
     </div>
   );
 }
@@ -1967,4 +1992,263 @@ function ManualSelectionPanel({
               <option value="">— Select —</option>
               {ISSUED_FOR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
-     
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Revision Table Panel ──
+
+function RevisionTablePanel({
+  revision, description, expectedDate,
+  pdfId, pageIndex, onOverride, clearOverride, getOverride, failNumbers,
+  sectionKey, collapsed, toggleCollapse,
+}) {
+  const isCollapsed = collapsed[sectionKey];
+
+  const rows = [
+    { field: 'revtable-revision',    label: 'Revision',    expected: revision    || null },
+    { field: 'revtable-description', label: 'Description', expected: description || null },
+    { field: 'revtable-date',        label: 'Date',        expected: expectedDate || null },
+  ];
+
+  const summary = { pass: 0, warning: 0, fail: 0 };
+  rows.forEach(r => {
+    const s = getOverride?.(pdfId, pageIndex, r.field) || 'pass';
+    if (s in summary) summary[s]++;
+  });
+
+  return (
+    <div className="v-section">
+      <button className="v-section-header" onClick={() => toggleCollapse(sectionKey)}>
+        <div className="v-section-left">
+          <span className={`v-chevron ${isCollapsed ? 'v-chevron-closed' : ''}`}>&#9662;</span>
+          <h3 className="v-section-title">Revision Table</h3>
+        </div>
+        <div className="v-section-counts">
+          {summary.pass > 0 && <span className="sc-pass">{summary.pass} passed</span>}
+          {summary.warning > 0 && <span className="sc-warning">{summary.warning} warnings</span>}
+          {summary.fail > 0 && <span className="sc-fail">{summary.fail} failed</span>}
+        </div>
+      </button>
+      {!isCollapsed && (
+        <table className="v-table">
+          <thead>
+            <tr>
+              <th className="v-badge-col"></th>
+              <th>Field</th>
+              <th>Expected</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => {
+              const overrideStatus = getOverride?.(pdfId, pageIndex, r.field);
+              const effectiveStatus = overrideStatus || 'pass';
+              const isOverridden = !!overrideStatus;
+              const isIssue = effectiveStatus === 'fail' || effectiveStatus === 'warning';
+              const badgeNum = failNumbers?.[r.field];
+
+              const handleClick = (targetStatus, e) => {
+                e.stopPropagation();
+                if (targetStatus === overrideStatus) {
+                  clearOverride?.(pdfId, pageIndex, r.field);
+                } else {
+                  onOverride?.(pdfId, pageIndex, r.field, targetStatus);
+                }
+              };
+
+              return (
+                <tr key={r.field} className={`vrow vrow-${effectiveStatus}`} data-field={r.field}>
+                  <td className="v-badge-cell">
+                    {badgeNum ? <span className="fail-badge">{badgeNum}</span> : null}
+                  </td>
+                  <td className="v-field">{r.label}</td>
+                  <td className="v-value">{r.expected || <span className="v-null">—</span>}</td>
+                  <td className="v-status">
+                    <span className="status-trio">
+                      {['pass', 'warning', 'fail'].map(s => {
+                        const isActiveBtn = effectiveStatus === s;
+                        return (
+                          <button
+                            key={s}
+                            className={`status-btn status-btn-${s}${isActiveBtn ? ' status-btn-active' : ''}${isActiveBtn && isOverridden ? ' status-btn-overridden' : ''}`}
+                            onClick={(e) => handleClick(s, e)}
+                            title={isActiveBtn && isOverridden ? 'Override active — click to revert' : `Set to ${s.toUpperCase()}`}
+                          >
+                            {s === 'pass' ? 'PASS' : s === 'warning' ? 'WARN' : 'FAIL'}
+                          </button>
+                        );
+                      })}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// ── Custom Checks section names ──
+const CUSTOM_SECTIONS = [
+  'Hardware',
+  'General Notes',
+  'Outstanding Information',
+  'Reference Drawings',
+  'Map Key',
+];
+
+// ── Custom Fields Panel ──
+
+function CustomFieldsPanel({
+  pdfId,
+  pageIndex,
+  customFields,
+  addField,
+  removeField,
+  updateField,
+  getOverride,
+  onOverride,
+  clearOverride,
+  failNumbers,
+  activeField,
+  onRowClick,
+  sectionKey,
+  collapsed,
+  toggleCollapse,
+}) {
+  const isCollapsed = collapsed[sectionKey];
+
+  const summary = { pass: 0, warning: 0, fail: 0 };
+  customFields.forEach(cf => {
+    const s = getOverride(pdfId, pageIndex, cf.id) || 'pass';
+    if (s in summary) summary[s]++;
+  });
+
+  return (
+    <div className="v-section">
+      <button className="v-section-header" onClick={() => toggleCollapse(sectionKey)}>
+        <div className="v-section-left">
+          <span className={`v-chevron ${isCollapsed ? 'v-chevron-closed' : ''}`}>&#9662;</span>
+          <h3 className="v-section-title">Custom Checks</h3>
+        </div>
+        <div className="v-section-counts">
+          {customFields.length === 0 && <span className="sc-info">No custom checks</span>}
+          {summary.pass > 0 && <span className="sc-pass">{summary.pass} passed</span>}
+          {summary.warning > 0 && <span className="sc-warning">{summary.warning} warnings</span>}
+          {summary.fail > 0 && <span className="sc-fail">{summary.fail} failed</span>}
+        </div>
+      </button>
+
+      {!isCollapsed && (
+        <table className="v-table">
+          <thead>
+            <tr>
+              <th className="v-badge-col"></th>
+              <th>Field</th>
+              <th>Expected</th>
+              <th>Result</th>
+              <th className="custom-remove-col"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {CUSTOM_SECTIONS.map(sectionName => {
+              const sectionFields = customFields.filter(cf => cf.section === sectionName);
+              return (
+                <React.Fragment key={sectionName}>
+                  <tr className="custom-section-header-row">
+                    <td colSpan={5} className="custom-section-label">{sectionName}</td>
+                  </tr>
+                  {sectionFields.map(cf => {
+                    const overrideStatus = getOverride(pdfId, pageIndex, cf.id);
+                    const effectiveStatus = overrideStatus || 'pass';
+                    const isOverridden = !!overrideStatus;
+                    const isIssue = effectiveStatus === 'fail' || effectiveStatus === 'warning';
+                    const isActive = isIssue && activeField === cf.id;
+                    const badgeNum = failNumbers?.[cf.id];
+
+                    const handleClick = (targetStatus, e) => {
+                      e.stopPropagation();
+                      if (targetStatus === overrideStatus) {
+                        clearOverride(pdfId, pageIndex, cf.id);
+                      } else {
+                        onOverride(pdfId, pageIndex, cf.id, targetStatus);
+                      }
+                    };
+
+                    return (
+                      <tr
+                        key={cf.id}
+                        className={`vrow vrow-${effectiveStatus} ${isActive ? 'vrow-active' : ''}`}
+                        data-field={cf.id}
+                        onClick={isIssue ? () => onRowClick?.(cf.id) : undefined}
+                        style={isIssue ? { cursor: 'pointer' } : undefined}
+                      >
+                        <td className="v-badge-cell">
+                          {badgeNum ? <span className="fail-badge">{badgeNum}</span> : null}
+                        </td>
+                        <td className="v-field">{sectionName}</td>
+                        <td className="v-value">
+                          <input
+                            className="custom-field-input"
+                            value={cf.expected}
+                            placeholder="Check description"
+                            onChange={e => updateField(pdfId, pageIndex, cf.id, { expected: e.target.value })}
+                            onClick={e => e.stopPropagation()}
+                          />
+                        </td>
+                        <td className="v-status">
+                          <span className="status-trio">
+                            {['pass', 'warning', 'fail'].map(s => {
+                              const isActiveBtn = effectiveStatus === s;
+                              return (
+                                <button
+                                  key={s}
+                                  className={`status-btn status-btn-${s}${isActiveBtn ? ' status-btn-active' : ''}${isActiveBtn && isOverridden ? ' status-btn-overridden' : ''}`}
+                                  onClick={(e) => handleClick(s, e)}
+                                  title={isActiveBtn && isOverridden ? 'Override active — click to revert' : `Set to ${s.toUpperCase()}`}
+                                >
+                                  {s === 'pass' ? 'PASS' : s === 'warning' ? 'WARN' : 'FAIL'}
+                                </button>
+                              );
+                            })}
+                          </span>
+                        </td>
+                        <td className="custom-remove-col">
+                          <button
+                            className="btn-icon-small btn-remove"
+                            onClick={(e) => { e.stopPropagation(); removeField(pdfId, pageIndex, cf.id); }}
+                            title="Remove this check"
+                          >
+                            &times;
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="custom-add-section-row">
+                    <td colSpan={5}>
+                      <button
+                        className="btn-custom-add-section"
+                        onClick={() => addField(pdfId, pageIndex, sectionName)}
+                      >
+                        + Add {sectionName} check
+                      </button>
+                    </td>
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+export default App;
