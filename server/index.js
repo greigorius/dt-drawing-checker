@@ -435,4 +435,29 @@ app.post('/api/notion-drawings-for-project', async (req, res) => {
 });
 
 // ── PDF Queue — preloaded PDFs from Dropbox via Make ─────────────────────────
-// In-memory for loca
+// In-memory for local dev. Cleared once the client picks up.
+const pdfQueue = [];
+
+app.post('/api/queue-pdf', (req, res) => {
+  const { downloadUrl, filename, filePath, submissionId } = req.body;
+  if (!downloadUrl || !filename) {
+    return res.status(400).json({ ok: false, error: 'downloadUrl and filename are required' });
+  }
+  pdfQueue.push({ downloadUrl, filename, filePath: filePath || null, submissionId: submissionId || null, queuedAt: new Date().toISOString() });
+  console.log(`[queue-pdf] queued: ${filename} (submission: ${submissionId || 'none'})`);
+  res.json({ ok: true, queued: pdfQueue.length });
+});
+
+app.get('/api/queued-pdfs', (req, res) => {
+  const items = pdfQueue.splice(0); // return and clear atomically
+  console.log(`[queued-pdfs] returning ${items.length} item(s)`);
+  res.json({ items });
+});
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

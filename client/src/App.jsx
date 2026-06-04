@@ -1988,4 +1988,149 @@ const CUSTOM_SECTIONS = [
 // ── Custom Fields Panel ──
 
 function CustomFieldsPanel({
-  pdfId,
+  pdfId,
+  pageIndex,
+  customFields,
+  addField,
+  removeField,
+  updateField,
+  getOverride,
+  onOverride,
+  clearOverride,
+  failNumbers,
+  activeField,
+  onRowClick,
+  sectionKey,
+  collapsed,
+  toggleCollapse,
+}) {
+  const isCollapsed = collapsed[sectionKey];
+
+  const summary = { pass: 0, warning: 0, fail: 0 };
+  customFields.forEach(cf => {
+    const s = getOverride(pdfId, pageIndex, cf.id) || 'pass';
+    if (s in summary) summary[s]++;
+  });
+
+  return (
+    <div className="v-section">
+      <button className="v-section-header" onClick={() => toggleCollapse(sectionKey)}>
+        <div className="v-section-left">
+          <span className={`v-chevron ${isCollapsed ? 'v-chevron-closed' : ''}`}>&#9662;</span>
+          <h3 className="v-section-title">Custom Checks</h3>
+        </div>
+        <div className="v-section-counts">
+          {customFields.length === 0 && <span className="sc-info">No custom checks</span>}
+          {summary.pass > 0 && <span className="sc-pass">{summary.pass} passed</span>}
+          {summary.warning > 0 && <span className="sc-warning">{summary.warning} warnings</span>}
+          {summary.fail > 0 && <span className="sc-fail">{summary.fail} failed</span>}
+        </div>
+      </button>
+
+      {!isCollapsed && (
+        <table className="v-table">
+          <thead>
+            <tr>
+              <th className="v-badge-col"></th>
+              <th>Field</th>
+              <th>Expected</th>
+              <th>Result</th>
+              <th className="custom-remove-col"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {CUSTOM_SECTIONS.map(sectionName => {
+              const sectionFields = customFields.filter(cf => cf.section === sectionName);
+              return (
+                <React.Fragment key={sectionName}>
+                  <tr className="custom-section-header-row">
+                    <td colSpan={5} className="custom-section-label">{sectionName}</td>
+                  </tr>
+                  {sectionFields.map(cf => {
+                    const overrideStatus = getOverride(pdfId, pageIndex, cf.id);
+                    const effectiveStatus = overrideStatus || 'pass';
+                    const isOverridden = !!overrideStatus;
+                    const isIssue = effectiveStatus === 'fail' || effectiveStatus === 'warning';
+                    const isActive = isIssue && activeField === cf.id;
+                    const badgeNum = failNumbers?.[cf.id];
+
+                    const handleClick = (targetStatus, e) => {
+                      e.stopPropagation();
+                      if (targetStatus === overrideStatus) {
+                        clearOverride(pdfId, pageIndex, cf.id);
+                      } else {
+                        onOverride(pdfId, pageIndex, cf.id, targetStatus);
+                      }
+                    };
+
+                    return (
+                      <tr
+                        key={cf.id}
+                        className={`vrow vrow-${effectiveStatus} ${isActive ? 'vrow-active' : ''}`}
+                        data-field={cf.id}
+                        onClick={isIssue ? () => onRowClick?.(cf.id) : undefined}
+                        style={isIssue ? { cursor: 'pointer' } : undefined}
+                      >
+                        <td className="v-badge-cell">
+                          {badgeNum ? <span className="fail-badge">{badgeNum}</span> : null}
+                        </td>
+                        <td className="v-field">{sectionName}</td>
+                        <td className="v-value">
+                          <input
+                            className="custom-field-input"
+                            value={cf.expected}
+                            placeholder="Check description"
+                            onChange={e => updateField(pdfId, pageIndex, cf.id, { expected: e.target.value })}
+                            onClick={e => e.stopPropagation()}
+                          />
+                        </td>
+                        <td className="v-status">
+                          <span className="status-trio">
+                            {['pass', 'warning', 'fail'].map(s => {
+                              const isActiveBtn = effectiveStatus === s;
+                              return (
+                                <button
+                                  key={s}
+                                  className={`status-btn status-btn-${s}${isActiveBtn ? ' status-btn-active' : ''}${isActiveBtn && isOverridden ? ' status-btn-overridden' : ''}`}
+                                  onClick={(e) => handleClick(s, e)}
+                                  title={isActiveBtn && isOverridden ? 'Override active — click to revert' : `Set to ${s.toUpperCase()}`}
+                                >
+                                  {s === 'pass' ? 'PASS' : s === 'warning' ? 'WARN' : 'FAIL'}
+                                </button>
+                              );
+                            })}
+                          </span>
+                        </td>
+                        <td className="custom-remove-col">
+                          <button
+                            className="btn-icon-small btn-remove"
+                            onClick={(e) => { e.stopPropagation(); removeField(pdfId, pageIndex, cf.id); }}
+                            title="Remove this check"
+                          >
+                            &times;
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="custom-add-section-row">
+                    <td colSpan={5}>
+                      <button
+                        className="btn-custom-add-section"
+                        onClick={() => addField(pdfId, pageIndex, sectionName)}
+                      >
+                        + Add {sectionName} check
+                      </button>
+                    </td>
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+export default App;

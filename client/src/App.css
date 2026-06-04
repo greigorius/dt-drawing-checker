@@ -2124,4 +2124,66 @@
 
 .custom-section-header-row td {
   background: #1e293b;
-  border-bottom: 1px so
+  border-bottom: 1px solid #334155;
+  padding: 0;
+}
+
+.custom-section-label {
+  padding: 6px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+}
+
+.custom-add-section-row td {
+  background: transparent;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 4px 10px;
+}
+
+.btn-custom-add-section {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 0;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.btn-custom-add-section:hover {
+  color: #1d4ed8;
+}
+
+.custom-field-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed #cbd5e1;
+  color: inherit;
+  font-size: 12px;
+  padding: 2px 0;
+  outline: none;
+  font-family: inherit;
+}
+
+.custom-field-input:focus {
+  border-bottom-color: #3b82f6;
+}
+
+.custom-field-input::placeholder {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.custom-remove-col {
+  width: 24px;
+  min-width: 24px;
+  max-width: 24px;
+  text-align: center;
+  padding: 0 4px;
+}
