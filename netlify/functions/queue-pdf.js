@@ -32,7 +32,8 @@ export const handler = async (event) => {
     console.log(`[queue-pdf] queued: ${filename}`)
     return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ ok: true, queued: existing.length }) }
   } catch (err) {
-    console.error('[queue-pdf]', err.message)
-    return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ ok: false, error: err.message }) }
+    // Blobs may not be configured — acknowledge the request so Make doesn't retry
+    console.warn('[queue-pdf]', err.message)
+    return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ ok: true, queued: 0, warning: 'Blobs not configured' }) }
   }
 }

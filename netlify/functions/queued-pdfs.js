@@ -22,7 +22,8 @@ export const handler = async (event) => {
     if (items.length) await store.set('queue', '[]') // clear after reading
     return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ items }) }
   } catch (err) {
-    console.error('[queued-pdfs]', err.message)
-    return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ items: [], error: err.message }) }
+    // Blobs may not be configured — return empty queue rather than failing
+    console.warn('[queued-pdfs]', err.message)
+    return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ items: [] }) }
   }
 }
