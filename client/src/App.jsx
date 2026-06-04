@@ -1508,7 +1508,7 @@ function App() {
                     const manualSel = selectedPdf?.manualSelections?.[selectedPage];
                     const issuedFor = manualSel?.issuedFor;
                     const issuedForLabel = ISSUED_FOR_OPTIONS.find(o => o.value === issuedFor)?.label || '';
-                    const revision = manualSel?.notionRow?.revision || '';
+                    const revision = manualSel?.notionRow?.revision || selectedPdf?.filenameRevision || '';
                     // Date: use file submission date (when dropped into Pending folder)
                     const expectedDate = selectedPdf?.submittedDate || '';
                     return (
