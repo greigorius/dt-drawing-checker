@@ -37,10 +37,4 @@ if errorlevel 1 (
 )
 
 echo.
-echo Done! Changes pushed to GitHub.
-echo.
-echo NOTE: Netlify auto-deploys on push if connected to this repo.
-echo       Check https://app.netlify.com for deploy status.
-
-endlocal
-pause
+echo Done! Changes
