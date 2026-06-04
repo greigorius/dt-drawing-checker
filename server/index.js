@@ -480,6 +480,62 @@ app.get('/api/local-pdf', (req, res) => {
   fs.createReadStream(safePath).pipe(res);
 });
 
+// ── Scan local Dropbox Pending folders ──────────────────────────────────
+// Returns all PDFs found in Drawing Submissions/{proj}/{stage}/Pending/
+// Uses DROPBOX_LOCAL_PATH from server/.env
+app.get('/api/scan-pending', (req, res) => {
+  const localRoot = process.env.DROPBOX_LOCAL_PATH;
+  if (!localRoot) {
+    return res.status(503).json({ files: [], error: 'DROPBOX_LOCAL_PATH not set in server/.env' });
+  }
+
+  const drawingRoot = path.join(localRoot, 'Drawing Submissions');
+  if (!fs.existsSync(drawingRoot)) {
+    return res.status(404).json({ files: [], error: `Not found: ${drawingRoot}` });
+  }
+
+  try {
+    const files = [];
+    const projects = fs.readdirSync(drawingRoot, { withFileTypes: true })
+      .filter(d => d.isDirectory()).map(d => d.name);
+
+    for (const projectNo of projects) {
+      const projPath = path.join(drawingRoot, projectNo);
+      const stages = fs.readdirSync(projPath, { withFileTypes: true })
+        .filter(d => d.isDirectory()).map(d => d.name);
+
+      for (const stage of stages) {
+        const pendingPath = path.join(projPath, stage, 'Pending');
+        if (!fs.existsSync(pendingPath)) continue;
+
+        const pdfs = fs.readdirSync(pendingPath)
+          .filter(f => f.toLowerCase().endsWith('.pdf') && !f.startsWith('.'));
+
+        for (const filename of pdfs) {
+          const base = filename.replace(/\.pdf$/i, '');
+          const parts = base.split('_');
+          const itemNo  = parts[0] || '';
+          const drawingNo = parts[1] || '';
+          files.push({
+            filename,
+            dropboxPath: `Drawing Submissions/${projectNo}/${stage}/Pending/${filename}`,
+            taskCode: itemNo ? `${projectNo}-${itemNo}` : projectNo,
+            drawingNo,
+            stage: stage.toUpperCase(),
+            submissionId: null,
+          });
+        }
+      }
+    }
+
+    console.log(`[scan-pending] Found ${files.length} PDF(s)`);
+    res.json({ files });
+  } catch (err) {
+    console.error('[scan-pending]', err.message);
+    res.status(500).json({ files: [], error: err.message });
+  }
+});
+
 // ── PDF Queue ─────────────────────────────────────────────────────────
 const pdfQueue = [];
 
@@ -506,3 +562,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+                                                                  
