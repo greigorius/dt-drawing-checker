@@ -2271,4 +2271,18 @@ function CustomFieldsPanel({
                         className="btn-custom-add-section"
                         onClick={() => addField(pdfId, pageIndex, sectionName)}
                       >
-          
+                        + Add {sectionName} check
+                      </button>
+                    </td>
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+export default App;
