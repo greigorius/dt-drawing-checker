@@ -434,10 +434,5 @@ app.post('/api/notion-drawings-for-project', async (req, res) => {
   }
 });
 
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
-
-module.exports = app;
+// ── PDF Queue — preloaded PDFs from Dropbox via Make ─────────────────────────
+// In-memory for loca

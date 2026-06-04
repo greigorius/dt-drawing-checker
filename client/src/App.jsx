@@ -473,6 +473,141 @@ function App() {
       });
   }, []);
 
+  // ── Auto-load queued PDFs from Dropbox (pushed by Make Scenario 1) ──────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function autoMatchNotion(pdfId, filename, filePath, projects) {
+      // Parse filename: {itemNo}_{drawingNo}_{revision}_{initials}.pdf
+      const base  = filename.replace(/\.pdf$/i, '');
+      const parts = base.split('_');
+      if (parts.length < 3) return;
+      const itemNo    = parts[0];
+      const drawingNo = parts[1];
+
+      // Parse project number + stage from filePath: .../Drawing Submissions/24-367/A4.5/Pending/...
+      let projectNo = null, stage = null;
+      if (filePath) {
+        const fp   = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
+        const pidx = fp.findIndex(p => p.toLowerCase() === 'pending');
+        if (pidx >= 2) { projectNo = fp[pidx - 2]; stage = fp[pidx - 1]; }
+      }
+
+      const project = (projects || []).find(p =>
+        (p.projectNumber && p.projectNumber.includes(projectNo)) ||
+        (p.projectName   && p.projectName.startsWith(projectNo))
+      );
+      if (!project) { console.warn(`[auto-match] No project for "${projectNo}"`); return; }
+
+      if (!cancelled) setPdfs(prev => prev.map(p => p.id !== pdfId ? p : { ...p, manualProject: project }));
+
+      try {
+        const suffRes = await fetch('/api/notion-suffixes-for-project', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectName: project.projectName }),
+        });
+        const { suffixes = [] } = await suffRes.json();
+
+        const itemNoPadded = itemNo.padStart(3, '0');
+        const suffix = suffixes.find(s =>
+          s.suffixNumber === itemNoPadded || s.suffixNumber === itemNo ||
+          s.suffixNumber?.replace(/^0+/, '') === itemNo.replace(/^0+/, '')
+        );
+        if (!suffix) { console.warn(`[auto-match] No suffix for item "${itemNo}"`); return; }
+
+        if (!cancelled) setPdfs(prev => prev.map(p => {
+          if (p.id !== pdfId) return p;
+          const sel = [...(p.manualSelections || [])];
+          sel[0] = { ...(sel[0] || {}), suffixNumber: suffix.suffixNumber, itemPageId: suffix.itemPageId, drawingNumber: null, notionRow: null, issuedFor: stage || null };
+          return { ...p, manualSelections: sel };
+        }));
+
+        const drawRes = await fetch('/api/notion-drawings-for-project', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemPageId: suffix.itemPageId }),
+        });
+        const { rows = [] } = await drawRes.json();
+        if (!cancelled) setPdfs(prev => prev.map(p => p.id !== pdfId ? p : { ...p, availableProjectDrawings: rows }));
+
+        const drawing = rows.find(r => r.drawingNumber?.toLowerCase() === drawingNo?.toLowerCase());
+        if (!drawing) { console.warn(`[auto-match] No drawing for "${drawingNo}"`); return; }
+
+        if (!cancelled) setPdfs(prev => prev.map(p => {
+          if (p.id !== pdfId) return p;
+          const sel = [...(p.manualSelections || [])];
+          sel[0] = { ...(sel[0] || {}), drawingNumber: drawing.drawingNumber, notionRow: drawing };
+          return { ...p, manualSelections: sel };
+        }));
+
+        if (suffix.suffixNumber && !cancelled) {
+          fetch('/api/finishes-lookup', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ suffixNumber: suffix.suffixNumber, projectPageId: project.pageId }),
+          }).then(r => r.json()).then(({ rows: fr }) => {
+            if (!cancelled) setPdfs(prev => prev.map(p => p.id !== pdfId ? p : { ...p, finishesRows: fr || [] }));
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('[auto-match] Error:', err.message);
+      }
+    }
+
+    async function loadQueued() {
+      try {
+        const res = await fetch('/api/queued-pdfs');
+        if (!res.ok || cancelled) return;
+        const { items = [] } = await res.json();
+        if (!items.length) return;
+
+        let projects = [];
+        try {
+          const pr = await fetch('/api/notion-all-projects');
+          projects = (await pr.json()).projects || [];
+          if (!cancelled) setNotionProjects(prev => prev ?? projects);
+        } catch { /* use empty */ }
+
+        for (const item of items) {
+          if (cancelled) return;
+          const { downloadUrl, filename, filePath, submissionId } = item;
+          try {
+            const pdfRes    = await fetch(downloadUrl);
+            if (!pdfRes.ok) throw new Error(`Download failed: ${pdfRes.status}`);
+            const blob      = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
+            const objectUrl = URL.createObjectURL(blob);
+            const loadedPdf = await pdfjsLib.getDocument(objectUrl).promise;
+            const entryId   = makeId();
+
+            const entry = {
+              id: entryId, displayName: filename, serverFilename: filename,
+              pdfDoc: loadedPdf, totalPages: loadedPdf.numPages,
+              checked: true, expanded: true, status: 'uploaded',
+              submissionId: submissionId || null,
+              filePath:     filePath     || null,
+              finishesRows: null, finishesError: null,
+              manualProject: null, availableProjectDrawings: null,
+              projectDrawingsLoading: false, notionRefreshing: false,
+              manualSelections: [], revisionTableDates: {}, customFields: {},
+            };
+
+            if (!cancelled) {
+              setPdfs(prev => [...prev, entry]);
+              setSelectedPdfId(prev => prev || entryId);
+              setSelectedPage(0);
+              autoMatchNotion(entryId, filename, filePath, projects);
+            }
+          } catch (err) {
+            console.warn(`[queued-pdfs] Failed to load "${filename}":`, err.message);
+          }
+        }
+      } catch (err) {
+        console.warn('[queued-pdfs] Poll failed:', err.message);
+      }
+    }
+
+    loadQueued();
+    return () => { cancelled = true; };
+  }, []); // mount only
+
   // Compute numbered pins for the current page view
   const pinsForPage = useMemo(() => {
     if (!selectedPdfId || !selectedPdf) return [];
@@ -572,6 +707,8 @@ function App() {
           checked: true,
           expanded: true,
           status: 'uploaded',
+          submissionId: null,
+          filePath: null,
           finishesRows: null,
           finishesError: null,
           // Manual selection state
@@ -1851,149 +1988,4 @@ const CUSTOM_SECTIONS = [
 // ── Custom Fields Panel ──
 
 function CustomFieldsPanel({
-  pdfId,
-  pageIndex,
-  customFields,
-  addField,
-  removeField,
-  updateField,
-  getOverride,
-  onOverride,
-  clearOverride,
-  failNumbers,
-  activeField,
-  onRowClick,
-  sectionKey,
-  collapsed,
-  toggleCollapse,
-}) {
-  const isCollapsed = collapsed[sectionKey];
-
-  const summary = { pass: 0, warning: 0, fail: 0 };
-  customFields.forEach(cf => {
-    const s = getOverride(pdfId, pageIndex, cf.id) || 'pass';
-    if (s in summary) summary[s]++;
-  });
-
-  return (
-    <div className="v-section">
-      <button className="v-section-header" onClick={() => toggleCollapse(sectionKey)}>
-        <div className="v-section-left">
-          <span className={`v-chevron ${isCollapsed ? 'v-chevron-closed' : ''}`}>&#9662;</span>
-          <h3 className="v-section-title">Custom Checks</h3>
-        </div>
-        <div className="v-section-counts">
-          {customFields.length === 0 && <span className="sc-info">No custom checks</span>}
-          {summary.pass > 0 && <span className="sc-pass">{summary.pass} passed</span>}
-          {summary.warning > 0 && <span className="sc-warning">{summary.warning} warnings</span>}
-          {summary.fail > 0 && <span className="sc-fail">{summary.fail} failed</span>}
-        </div>
-      </button>
-
-      {!isCollapsed && (
-        <table className="v-table">
-          <thead>
-            <tr>
-              <th className="v-badge-col"></th>
-              <th>Field</th>
-              <th>Expected</th>
-              <th>Result</th>
-              <th className="custom-remove-col"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {CUSTOM_SECTIONS.map(sectionName => {
-              const sectionFields = customFields.filter(cf => cf.section === sectionName);
-              return (
-                <React.Fragment key={sectionName}>
-                  <tr className="custom-section-header-row">
-                    <td colSpan={5} className="custom-section-label">{sectionName}</td>
-                  </tr>
-                  {sectionFields.map(cf => {
-                    const overrideStatus = getOverride(pdfId, pageIndex, cf.id);
-                    const effectiveStatus = overrideStatus || 'pass';
-                    const isOverridden = !!overrideStatus;
-                    const isIssue = effectiveStatus === 'fail' || effectiveStatus === 'warning';
-                    const isActive = isIssue && activeField === cf.id;
-                    const badgeNum = failNumbers?.[cf.id];
-
-                    const handleClick = (targetStatus, e) => {
-                      e.stopPropagation();
-                      if (targetStatus === overrideStatus) {
-                        clearOverride(pdfId, pageIndex, cf.id);
-                      } else {
-                        onOverride(pdfId, pageIndex, cf.id, targetStatus);
-                      }
-                    };
-
-                    return (
-                      <tr
-                        key={cf.id}
-                        className={`vrow vrow-${effectiveStatus} ${isActive ? 'vrow-active' : ''}`}
-                        data-field={cf.id}
-                        onClick={isIssue ? () => onRowClick?.(cf.id) : undefined}
-                        style={isIssue ? { cursor: 'pointer' } : undefined}
-                      >
-                        <td className="v-badge-cell">
-                          {badgeNum ? <span className="fail-badge">{badgeNum}</span> : null}
-                        </td>
-                        <td className="v-field">{sectionName}</td>
-                        <td className="v-value">
-                          <input
-                            className="custom-field-input"
-                            value={cf.expected}
-                            placeholder="Check description"
-                            onChange={e => updateField(pdfId, pageIndex, cf.id, { expected: e.target.value })}
-                            onClick={e => e.stopPropagation()}
-                          />
-                        </td>
-                        <td className="v-status">
-                          <span className="status-trio">
-                            {['pass', 'warning', 'fail'].map(s => {
-                              const isActiveBtn = effectiveStatus === s;
-                              return (
-                                <button
-                                  key={s}
-                                  className={`status-btn status-btn-${s}${isActiveBtn ? ' status-btn-active' : ''}${isActiveBtn && isOverridden ? ' status-btn-overridden' : ''}`}
-                                  onClick={(e) => handleClick(s, e)}
-                                  title={isActiveBtn && isOverridden ? 'Override active — click to revert' : `Set to ${s.toUpperCase()}`}
-                                >
-                                  {s === 'pass' ? 'PASS' : s === 'warning' ? 'WARN' : 'FAIL'}
-                                </button>
-                              );
-                            })}
-                          </span>
-                        </td>
-                        <td className="custom-remove-col">
-                          <button
-                            className="btn-icon-small btn-remove"
-                            onClick={(e) => { e.stopPropagation(); removeField(pdfId, pageIndex, cf.id); }}
-                            title="Remove this check"
-                          >
-                            &times;
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="custom-add-section-row">
-                    <td colSpan={5}>
-                      <button
-                        className="btn-custom-add-section"
-                        onClick={() => addField(pdfId, pageIndex, sectionName)}
-                      >
-                        + Add {sectionName} check
-                      </button>
-                    </td>
-                  </tr>
-                </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-export default App;
+  pdfId,

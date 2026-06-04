@@ -1,6 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import JSZip from 'jszip';
 
+const ADF_BASE_URL = 'https://axiom-drawing-flow.netlify.app';
+
 const ISSUED_FOR_OPTIONS = [
   { value: 'A4.5', label: 'A4.5 - AUTHORISED MFG. and CONST. DESIGN' },
   { value: 'APPROVAL', label: 'APPROVAL' },
@@ -274,6 +276,137 @@ export default function ExportSection({
   const [progress, setProgress] = useState('');
   const [result, setResult] = useState(null);
 
+  // ── Axiom Review Actions (shown when a queued PDF with submissionId is checked) ──
+  const submissionPdf = checkedDone.find(p => p.submissionId) || null;
+  const submissionId  = submissionPdf?.submissionId || null;
+  const [approving, setApproving]       = useState(false);
+  const [bouncing,  setBouncing]        = useState(false);
+  const [actionResult, setActionResult] = useState(null); // { ok, msg }
+
+  const handleApprove = useCallback(async () => {
+    if (!submissionId || approving) return;
+    setApproving(true);
+    setActionResult(null);
+    try {
+      const r = await fetch(`${ADF_BASE_URL}/api/df/submissions/${submissionId}/approve`, { method: 'PATCH' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      setActionResult({ ok: true, msg: 'Approved — DT notified to produce final PDF + DWG.' });
+    } catch (err) {
+      setActionResult({ ok: false, msg: `Approve failed: ${err.message}` });
+    } finally {
+      setApproving(false);
+    }
+  }, [submissionId, approving]);
+
+  const handleBounce = useCallback(async () => {
+    if (!submissionId || bouncing || checkedDone.length === 0) return;
+    setBouncing(true);
+    setActionResult(null);
+    setProgress('Rendering pages…');
+
+    const EXPORT_SCALE = 150 / 72;
+
+    try {
+      const pdfPageData = [];
+      let pageNum = 0;
+
+      for (const pdf of checkedDone) {
+        for (let pi = 0; pi < pdf.totalPages; pi++) {
+          pageNum++;
+          setProgress(`Rendering page ${pageNum}…`);
+
+          const manualSel     = pdf.manualSelections?.[pi] || {};
+          const manualProject = pdf.manualProject || null;
+          const standardRows  = filterByOptions(buildPageRows(manualProject, manualSel));
+          const customRows    = (pdf.customFields?.[pi] || []).map(cf => ({
+            field: cf.id, label: cf.section || cf.label || 'Custom', expected: cf.expected || null,
+          }));
+
+          const failItems = [...standardRows, ...customRows]
+            .filter(r => getOverride?.(pdf.id, pi, r.field) === 'fail')
+            .map(r => ({ field: r.field, label: r.label, expected: r.expected || '' }));
+
+          if (pi === 0) {
+            (pdf.finishesRows || []).forEach((row, i) => {
+              if (finishesOverrides[`${pdf.id}-${i}`] === 'fail') {
+                failItems.push({
+                  field: `finishes-row-${i}`,
+                  label: `Finishes: ${row.cadRef || row.specRef || `Row ${i + 1}`}`,
+                  expected: row.finishDescription || '',
+                });
+              }
+            });
+          }
+
+          const pdfPage  = await pdf.pdfDoc.getPage(pi + 1);
+          const vp1      = pdfPage.getViewport({ scale: 1 });
+          const viewport = pdfPage.getViewport({ scale: EXPORT_SCALE });
+          const canvas   = document.createElement('canvas');
+          canvas.width   = Math.floor(viewport.width);
+          canvas.height  = Math.floor(viewport.height);
+          const ctx      = canvas.getContext('2d');
+          await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+
+          const pinsForPage  = pins[pdf.id]?.[pi] || {};
+          const annotations  = [];
+          const unplaced     = [];
+          failItems.forEach((fi, i) => {
+            const pin = pinsForPage[fi.field];
+            if (pin) annotations.push({ n: i + 1, x: pin.x, y: pin.y, label: fi.label, expected: fi.expected });
+            else     unplaced.push({ n: i + 1, label: fi.label, expected: fi.expected });
+          });
+
+          pdfPageData.push({
+            pngBase64:    canvas.toDataURL('image/png').split(',')[1],
+            pageWidthPt:  vp1.width,
+            pageHeightPt: vp1.height,
+            annotations,
+            unplaced,
+          });
+        }
+      }
+
+      if (pdfPageData.length === 0) throw new Error('No pages to export');
+
+      setProgress('Generating annotated PDF…');
+      const pdfRes = await fetch('/api/export-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pages: pdfPageData }),
+      });
+      if (!pdfRes.ok) throw new Error(`PDF generation failed (HTTP ${pdfRes.status})`);
+      const pdfBlob = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
+
+      // Convert to base64 for ADF
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload  = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(pdfBlob);
+      });
+
+      const filename = submissionPdf?.displayName?.replace(/\.pdf$/i, '_annotated.pdf') || 'annotated.pdf';
+
+      setProgress('Sending to Axiom Drawing Flow…');
+      const bounceRes = await fetch(`${ADF_BASE_URL}/api/df/submissions/${submissionId}/bounce`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ annotatedPdfBase64: base64, annotatedPdfFilename: filename }),
+      });
+      const bounceData = await bounceRes.json().catch(() => ({}));
+      if (!bounceRes.ok) throw new Error(bounceData.error || `HTTP ${bounceRes.status}`);
+
+      setActionResult({ ok: true, msg: 'Bounced — annotated PDF sent to DT via email.' });
+    } catch (err) {
+      console.error('Bounce error:', err);
+      setActionResult({ ok: false, msg: `Bounce failed: ${err.message}` });
+    } finally {
+      setBouncing(false);
+      setProgress('');
+    }
+  }, [submissionId, submissionPdf, bouncing, checkedDone, filterByOptions, getOverride, pins, finishesOverrides]);
+
   const canExport = (exportPdf || exportPng) && checkedDone.length > 0;
 
   const handleExport = useCallback(async () => {
@@ -405,161 +538,4 @@ export default function ExportSection({
               drawPinAnnotations(ctx, pinsForThisPage, failItems, canvas.width, canvas.height);
             }
             const blob = await canvasToBlob(canvas);
-            pngBlobs.push(blob);
-            pngNames.push(`${manualSel?.drawingNumber || `page-${pi + 1}`}.png`);
-          }
-        }
-      }
-
-      // ── Generate merged PDF via server (vector annotations added server-side) ──
-      let pdfBlob = null;
-      if (exportPdf && pdfPageData.length > 0) {
-        setProgress('Generating PDF\u2026');
-        const res = await fetch('/api/export-pdf', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pages: pdfPageData }),
-        });
-        if (!res.ok) throw new Error(`PDF generation failed (HTTP ${res.status})`);
-        pdfBlob = new Blob([await res.arrayBuffer()], { type: 'application/pdf' });
-      }
-
-      // ── Build final output blob ──
-      setProgress('Saving\u2026');
-      let finalBlob;
-
-      if (outputType === 'zip') {
-        const zip = new JSZip();
-        if (pdfBlob) zip.file(`${pdfBasename}.pdf`, pdfBlob);
-        pngBlobs.forEach((blob, i) => zip.file(pngNames[i], blob));
-        finalBlob = await zip.generateAsync({ type: 'blob' });
-      } else if (outputType === 'pdf') {
-        finalBlob = pdfBlob;
-      } else {
-        finalBlob = pngBlobs[0];
-      }
-
-      if (!finalBlob) throw new Error('Nothing to save');
-
-      // ── Save: write to pre-opened handle, or fall back to download ──
-      if (fileHandle) {
-        await writeToHandle(fileHandle, finalBlob);
-      } else {
-        downloadBlob(finalBlob, suggestedName);
-      }
-
-      const parts = [];
-      if (exportPdf && pdfBlob) parts.push('1 PDF');
-      if (exportPng && pngBlobs.length > 0) parts.push(`${pngBlobs.length} PNG${pngBlobs.length !== 1 ? 's' : ''}`);
-      setResult({ ok: true, msg: `Exported ${parts.join(' and ')}` });
-    } catch (err) {
-      console.error('Export error:', err);
-      setResult({ ok: false, msg: `Export failed: ${err.message}` });
-    } finally {
-      setExporting(false);
-      setProgress('');
-    }
-  }, [canExport, checkedDone, totalPages, filterByOptions, getOverride, exportPdf, exportPng, pins, finishesOverrides]);
-
-  return (
-    <div className="v-section">
-      <button className="v-section-header" onClick={() => toggleCollapse(SECTION_KEY)}>
-        <div className="v-section-left">
-          <span className={`v-chevron ${isCollapsed ? 'v-chevron-closed' : ''}`}>&#9662;</span>
-          <h3 className="v-section-title">Export Mark-ups</h3>
-        </div>
-        {checkedDone.length > 0 && (
-          <div className="v-section-counts">
-            <span className="sc-pass">{totalPages} page{totalPages !== 1 ? 's' : ''}</span>
-          </div>
-        )}
-      </button>
-
-      {!isCollapsed && (
-        <div className="export-inline-body">
-
-          {/* Two-column layout: Formats | Drawings */}
-          <div className="export-cols">
-
-            {/* Left: format checkboxes */}
-            <div className="export-col">
-              <div className="export-col-label">Formats</div>
-              <label className="export-check-row">
-                <input
-                  type="checkbox"
-                  checked={exportPdf}
-                  onChange={e => setExportPdf(e.target.checked)}
-                  disabled={exporting}
-                />
-                <div>
-                  <div className="export-check-title">PDF (merged)</div>
-                </div>
-              </label>
-              <label className="export-check-row">
-                <input
-                  type="checkbox"
-                  checked={exportPng}
-                  onChange={e => setExportPng(e.target.checked)}
-                  disabled={exporting}
-                />
-                <div>
-                  <div className="export-check-title">PNG (100 DPI)</div>
-                  <div className="export-check-hint">one per page</div>
-                </div>
-              </label>
-            </div>
-
-            {/* Right: drawings list */}
-            <div className="export-col">
-              <div className="export-col-label">Drawings</div>
-              {checkedDone.length === 0 ? (
-                <p className="export-no-checks">No drawings selected.</p>
-              ) : (
-                <div className="export-drawings-list">
-                  {checkedDone.map(pdf => (
-                    <div key={pdf.id} className="export-drawing-item">
-                      <span className="export-drawing-name" title={pdf.displayName}>
-                        {pdf.displayName}
-                      </span>
-                      <span className="export-drawing-pages">{pdf.totalPages}p</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-          </div>
-
-          {/* Progress */}
-          {exporting && (
-            <div className="export-progress-row">
-              <div className="spinner spinner-small" style={{ display: 'inline-block', marginRight: 6 }} />
-              <span>{progress}</span>
-            </div>
-          )}
-
-          {/* Result banner */}
-          {result && (
-            <div className={`export-result ${result.ok ? 'export-result-ok' : 'export-result-err'}`}>
-              {result.msg}
-            </div>
-          )}
-
-          {/* Export button */}
-          <button
-            className="export-run-btn-inline"
-            onClick={handleExport}
-            disabled={!canExport || exporting}
-          >
-            {exporting
-              ? 'Exporting\u2026'
-              : checkedDone.length === 0
-              ? 'Export'
-              : `Export (${totalPages} page${totalPages !== 1 ? 's' : ''})`}
-          </button>
-
-        </div>
-      )}
-    </div>
-  );
-}
+     
