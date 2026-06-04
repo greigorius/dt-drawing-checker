@@ -2,8 +2,10 @@
 setlocal
 
 :: ── Prompt for commit message ─────────────────────────────────────────────────
-set /p MSG="Commit message (leave blank to use 'Update'): "
-if "%MSG%"=="" set MSG=Update
+for /f "tokens=*" %%i in ('powershell -NoProfile -Command "Get-Date -Format \"yyyy-MM-dd HH:mm:ss\""') do set DATETIME=%%i
+set DEFAULT_MSG=Update %DATETIME%
+set /p MSG="Commit message (leave blank for '%DEFAULT_MSG%'): "
+if "%MSG%"=="" set MSG=%DEFAULT_MSG%
 
 echo.
 echo Staging all changes (respecting .gitignore)...

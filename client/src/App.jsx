@@ -2268,4 +2268,7 @@ function CustomFieldsPanel({
                   <tr className="custom-add-section-row">
                     <td colSpan={5}>
                       <button
-                        className="btn-custom-add-section
+                        className="btn-custom-add-section"
+                        onClick={() => addField(pdfId, pageIndex, sectionName)}
+                      >
+          
