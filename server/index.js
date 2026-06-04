@@ -455,13 +455,11 @@ app.get('/api/df-submissions', async (req, res) => {
 // path: relative path from ADF, e.g. "Drawing Submissions/24-367/A4.5/Pending/file.pdf"
 // Falls back to DROPBOX_LOCAL_PATH env var if root is not provided by client.
 app.get('/api/local-pdf', (req, res) => {
-  const rootParam = req.query.root;
-  const localRoot = rootParam || process.env.DROPBOX_LOCAL_PATH;
+  const localRoot = process.env.DROPBOX_LOCAL_PATH;
 
   if (!localRoot) {
     return res.status(503).json({
-      error: 'Dropbox root path not configured',
-      hint: 'Set it in DT Checker Settings (gear icon) or add DROPBOX_LOCAL_PATH to server/.env',
+      error: 'DROPBOX_LOCAL_PATH not set in server/.env',
     });
   }
 
@@ -508,3 +506,4 @@ if (require.main === module) {
 }
 
 module.exports = app;
+                                                                  
