@@ -43,4 +43,9 @@
   status = 200
 
 [[redirects]]
-  from = "/api/queued-
+  from = "/api/queued-pdfs"
+  to   = "/.netlify/functions/queued-pdfs"
+  status = 200
+
+[build.environment]
+  NODE_VERSION = "18"

@@ -10,7 +10,7 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: '2-digit' });
 }
 
-export default function LoadPendingModal({ onClose, onLoadSubmission }) {
+export default function LoadPendingModal({ onClose, onLoadSubmission, dropboxRoot = '' }) {
   const [submissions, setSubmissions] = useState(null);
   const [error, setError]             = useState(null);
   const [loading, setLoading]         = useState({});  // { [id]: 'loading' | 'done' | 'error' }
@@ -35,10 +35,11 @@ export default function LoadPendingModal({ onClose, onLoadSubmission }) {
 
     let pdfBlob = null;
 
-    // Try local Dropbox path first (works when DROPBOX_LOCAL_PATH is set in server/.env)
+    // Try local Dropbox path first — uses root from Settings (localStorage) or server/.env fallback
     if (sub.dropboxPath) {
       try {
-        const r = await fetch(`/api/local-pdf?path=${encodeURIComponent(sub.dropboxPath)}`);
+        const rootParam = dropboxRoot ? `&root=${encodeURIComponent(dropboxRoot)}` : '';
+        const r = await fetch(`/api/local-pdf?path=${encodeURIComponent(sub.dropboxPath)}${rootParam}`);
         if (r.ok) {
           pdfBlob = new Blob([await r.arrayBuffer()], { type: 'application/pdf' });
           setLoadMsg(p => ({ ...p, [sub.id]: 'Loading PDF…' }));
