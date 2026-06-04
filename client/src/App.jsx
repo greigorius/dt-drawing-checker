@@ -822,7 +822,7 @@ function App() {
             pdfDoc: loadedPdf, totalPages: loadedPdf?.numPages ?? 0,
             checked: !!loadedPdf, expanded: true,
             status: loadedPdf ? 'uploaded' : 'pending-pdf',
-            submissionId: sub.id, filePath: null, submittedDate: sub.submittedDate || null,
+            submissionId: sub.id, filePath: null, submittedDate: sub.submittedDate || null, filenameRevision: sub.revision || null,
             finishesRows: [], finishesError: null,
             manualProject: null,
             availableProjectSuffixes: null, projectSuffixesLoading: false,
@@ -857,6 +857,10 @@ function App() {
             body: JSON.stringify({ drawingNo: sub.drawingNo, projectNo }),
           }).then(r => r.json()).catch(() => ({ row: null }));
 
+          // Merge filename revision as fallback if Notion Rev property is empty
+          const mergedRow = notionRow
+            ? { ...notionRow, revision: notionRow.revision || sub.revision || null }
+            : null;
           setPdfs(prev => prev.map(p => {
             if (p.id !== entryId) return p;
             const sel = [...(p.manualSelections || [])];
@@ -865,7 +869,7 @@ function App() {
               suffixNumber:  notionRow?.suffixNumber || sub.taskCode?.split('-')[2] || null,
               itemPageId:    null,
               drawingNumber: notionRow?.drawingNumber || sub.drawingNo || null,
-              notionRow:     notionRow || null,
+              notionRow:     mergedRow,
               issuedFor:     sub.stage || null,
             };
             return { ...p, manualSelections: sel };

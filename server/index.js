@@ -546,14 +546,16 @@ app.get('/api/scan-pending', (req, res) => {
         for (const filename of pdfs) {
           const base = filename.replace(/\.pdf$/i, '');
           const parts = base.split('_');
-          const itemNo  = parts[0] || '';
-          const drawingNo = parts[1] || '';
+          const itemNo   = parts[0] || '';
+          const drawingNo  = parts[1] || '';
+          const revision   = parts[2] || '';
           const stat = fs.statSync(path.join(pendingPath, filename));
           const submittedDate = stat.mtime.toISOString().split('T')[0];
           files.push({
             filename,
             dropboxPath: `Drawing Submissions/${projectNo}/${stage}/Pending/${filename}`,
             taskCode: itemNo ? `${projectNo}-${itemNo}` : projectNo,
+            revision,
             drawingNo,
             stage: stage.toUpperCase(),
             submittedDate,
