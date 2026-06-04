@@ -822,7 +822,7 @@ function App() {
             pdfDoc: loadedPdf, totalPages: loadedPdf?.numPages ?? 0,
             checked: !!loadedPdf, expanded: true,
             status: loadedPdf ? 'uploaded' : 'pending-pdf',
-            submissionId: sub.id, filePath: null,
+            submissionId: sub.id, filePath: null, submittedDate: sub.submittedDate || null,
             finishesRows: [], finishesError: null,
             manualProject: null,
             availableProjectSuffixes: null, projectSuffixesLoading: false,
@@ -1505,12 +1505,8 @@ function App() {
                     const issuedFor = manualSel?.issuedFor;
                     const issuedForLabel = ISSUED_FOR_OPTIONS.find(o => o.value === issuedFor)?.label || '';
                     const revision = manualSel?.notionRow?.revision || '';
-                    // Date expected: S5 drawings → S4 DT Delivery Date; A4.5/Construction → S5 DT Delivery Date
-                    const expectedDate = issuedFor === 'S5'
-                      ? (manualSel?.notionRow?.s4DtDeliveryDateActual || '')
-                      : (issuedFor === 'A4.5' || issuedFor === 'CONSTRUCTION')
-                        ? (manualSel?.notionRow?.s5DtDeliveryDateActual || '')
-                        : '';
+                    // Date: use file submission date (when dropped into Pending folder)
+                    const expectedDate = selectedPdf?.submittedDate || '';
                     return (
                       <RevisionTablePanel
                         revision={revision}
@@ -2282,3 +2278,4 @@ function CustomFieldsPanel({
 }
 
 export default App;
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     

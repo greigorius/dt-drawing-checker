@@ -447,10 +447,10 @@ app.post('/api/notion-drawing-by-number', async (req, res) => {
 
   const filter = projectNo
     ? { and: [
-        { property: 'Drawing Number', rich_text: { equals: drawingNo } },
+        { property: 'Drawing Number', title: { equals: drawingNo } },
         { property: 'Project', formula: { string: { contains: projectNo } } },
       ]}
-    : { property: 'Drawing Number', rich_text: { equals: drawingNo } };
+    : { property: 'Drawing Number', title: { equals: drawingNo } };
 
   try {
     const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
@@ -548,12 +548,15 @@ app.get('/api/scan-pending', (req, res) => {
           const parts = base.split('_');
           const itemNo  = parts[0] || '';
           const drawingNo = parts[1] || '';
+          const stat = fs.statSync(path.join(pendingPath, filename));
+          const submittedDate = stat.mtime.toISOString().split('T')[0];
           files.push({
             filename,
             dropboxPath: `Drawing Submissions/${projectNo}/${stage}/Pending/${filename}`,
             taskCode: itemNo ? `${projectNo}-${itemNo}` : projectNo,
             drawingNo,
             stage: stage.toUpperCase(),
+            submittedDate,
             submissionId: null,
           });
         }

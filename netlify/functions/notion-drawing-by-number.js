@@ -38,7 +38,7 @@ export const handler = async (event) => {
 
   const filter = projectNo
     ? { and: [
-        { property: 'Drawing Number', rich_text: { equals: drawingNo } },
+        { property: 'Drawing Number', title: { equals: drawingNo } },
         { property: 'Project', formula: { string: { contains: projectNo } } },
       ]}
     : { property: 'Drawing Number', rich_text: { equals: drawingNo } }
