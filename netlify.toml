@@ -6,4 +6,31 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
-# ── API redirects → individual Netlify functions ─────────────────────────────�
+# ── API redirects → individual Netlify functions ──────────────────────────────
+[[redirects]]
+  from = "/api/notion-all-projects"
+  to   = "/.netlify/functions/notion-all-projects"
+  status = 200
+
+[[redirects]]
+  from = "/api/notion-suffixes-for-project"
+  to   = "/.netlify/functions/notion-suffixes"
+  status = 200
+
+[[redirects]]
+  from = "/api/notion-drawings-for-project"
+  to   = "/.netlify/functions/notion-drawings"
+  status = 200
+
+[[redirects]]
+  from = "/api/finishes-lookup"
+  to   = "/.netlify/functions/finishes-lookup"
+  status = 200
+
+[[redirects]]
+  from = "/api/export-pdf"
+  to   = "/.netlify/functions/export-pdf"
+  status = 200
+
+[build.environment]
+  NODE_VERSION = "18"
