@@ -435,4 +435,76 @@ app.post('/api/notion-drawings-for-project', async (req, res) => {
   }
 });
 
-// ── Load Pending: proxy ADF submissions list ───────────────────────────
+// ── Load Pending: proxy ADF submissions list ──────────────
+const ADF_BASE_URL = process.env.ADF_BASE_URL || 'https://axiom-drawing-flow.netlify.app';
+
+app.get('/api/df-submissions', async (req, res) => {
+  try {
+    const r = await fetch(`${ADF_BASE_URL}/api/df/submissions?status=Submitted`);
+    if (!r.ok) throw new Error(`ADF returned ${r.status}`);
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    console.error('[df-submissions]', err.message);
+    res.status(500).json({ submissions: [], error: err.message });
+  }
+});
+
+// ── Load Pending: serve a local Dropbox file ────────────────
+// root: absolute path to the folder containing "Drawing Submissions/" (passed from client)
+// path: relative path from ADF, e.g. "Drawing Submissions/24-367/A4.5/Pending/file.pdf"
+// Falls back to DROPBOX_LOCAL_PATH env var if root is not provided by client.
+app.get('/api/local-pdf', (req, res) => {
+  const rootParam = req.query.root;
+  const localRoot = rootParam || process.env.DROPBOX_LOCAL_PATH;
+
+  if (!localRoot) {
+    return res.status(503).json({
+      error: 'Dropbox root path not configured',
+      hint: 'Set it in DT Checker Settings (gear icon) or add DROPBOX_LOCAL_PATH to server/.env',
+    });
+  }
+
+  const relPath = req.query.path;
+  if (!relPath) return res.status(400).json({ error: 'path query param required' });
+
+  const safePath = path.resolve(localRoot, relPath.replace(/\//g, path.sep));
+  if (!safePath.startsWith(path.resolve(localRoot))) {
+    return res.status(403).json({ error: 'Path traversal not allowed' });
+  }
+  if (!fs.existsSync(safePath)) {
+    return res.status(404).json({ error: 'File not found', resolved: safePath });
+  }
+
+  const filename = path.basename(safePath);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  fs.createReadStream(safePath).pipe(res);
+});
+
+// ── PDF Queue ─────────────────────────────────────────────────────────
+const pdfQueue = [];
+
+app.post('/api/queue-pdf', (req, res) => {
+  const { downloadUrl, filename, filePath, submissionId } = req.body;
+  if (!downloadUrl || !filename) {
+    return res.status(400).json({ ok: false, error: 'downloadUrl and filename are required' });
+  }
+  pdfQueue.push({ downloadUrl, filename, filePath: filePath || null, submissionId: submissionId || null, queuedAt: new Date().toISOString() });
+  console.log(`[queue-pdf] queued: ${filename} (submission: ${submissionId || 'none'})`);
+  res.json({ ok: true, queued: pdfQueue.length });
+});
+
+app.get('/api/queued-pdfs', (req, res) => {
+  const items = pdfQueue.splice(0);
+  console.log(`[queued-pdfs] returning ${items.length} item(s)`);
+  res.json({ items });
+});
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
