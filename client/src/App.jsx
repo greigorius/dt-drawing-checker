@@ -92,6 +92,7 @@ function App() {
   const [selectedPdfId, setSelectedPdfId] = useState(null);
   const [selectedPage, setSelectedPage] = useState(0);
   const [loadingPending, setLoadingPending] = useState(false);
+  const [pendingStatus,  setPendingStatus]  = useState(''); // feedback message
 
   // ── Notion projects (loaded on mount for project dropdown) ──
   const [notionProjects, setNotionProjects] = useState(null);
@@ -764,13 +765,25 @@ function App() {
   const loadAllPending = useCallback(async () => {
     if (loadingPending) return;
     setLoadingPending(true);
+    setPendingStatus('Fetching submissions…');
 
     try {
       // 1. Fetch submission list
       const subRes = await fetch('/api/df-submissions');
-      if (!subRes.ok) throw new Error(`df-submissions: ${subRes.status}`);
-      const { submissions = [] } = await subRes.json();
-      if (!submissions.length) { setLoadingPending(false); return; }
+      if (!subRes.ok) {
+        const txt = await subRes.text().catch(() => '');
+        throw new Error(`Server returned ${subRes.status}${txt ? ': ' + txt.slice(0, 100) : ''}`);
+      }
+      const data = await subRes.json();
+      if (data.error) throw new Error(data.error);
+      const submissions = data.submissions || [];
+      if (!submissions.length) {
+        setPendingStatus('No pending submissions found in Axiom Drawing Flow');
+        setLoadingPending(false);
+        setTimeout(() => setPendingStatus(''), 4000);
+        return;
+      }
+      setPendingStatus(`Loading ${submissions.length} drawing${submissions.length !== 1 ? 's' : ''}…`);
 
       // 2. Fetch Notion projects once
       let projects = notionProjects;
@@ -863,10 +876,14 @@ function App() {
 
         } catch (err) {
           console.warn(`[load-pending] ${sub.title}:`, err.message);
+          setPendingStatus(`Error loading "${sub.title}": ${err.message}`);
         }
       }
+      setPendingStatus('');
     } catch (err) {
       console.error('[load-pending]', err.message);
+      setPendingStatus(`Error: ${err.message}`);
+      setTimeout(() => setPendingStatus(''), 6000);
     } finally {
       setLoadingPending(false);
     }
@@ -1127,6 +1144,10 @@ function App() {
               hidden
             />
           </div>
+
+          {pendingStatus && (
+            <div className="pending-status-bar">{pendingStatus}</div>
+          )}
 
           {pdfs.length === 0 ? (
             <div className="pagelist-empty">
@@ -1941,317 +1962,4 @@ function ManualSelectionPanel({
         <div className="msp-field-row">
           <label className="msp-label">Suffix No.</label>
           <div className="msp-control">
-            {loadingSuffixes ? (
-              <span className="msp-loading">Loading…</span>
-            ) : (
-              <select
-                className="msp-select"
-                value={manualSel.itemPageId || ''}
-                disabled={!manualProject}
-                onChange={e => {
-                  const item = availableSuffixes.find(s => s.itemPageId === e.target.value) || null;
-                  onSelectSuffix(item?.suffixNumber || null, item?.itemPageId || null);
-                }}
-              >
-                <option value="">{manualProject ? '— Select suffix —' : '— Select project first —'}</option>
-                {availableSuffixes.map(s => (
-                  <option key={s.itemPageId || s.suffixNumber} value={s.itemPageId || ''}>
-                    {s.suffixNumber || '(unknown)'}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-        </div>
-
-        {/* Drawing Number */}
-        <div className="msp-field-row">
-          <label className="msp-label">Drawing No.</label>
-          <div className="msp-control">
-            <select
-              className="msp-select"
-              value={manualSel.drawingNumber || ''}
-              disabled={!manualSel.suffixNumber}
-              onChange={e => {
-                const row = availableDrawings.find(r => r.drawingNumber === e.target.value) || null;
-                onSelectDrawing(e.target.value || null, row);
-              }}
-            >
-              <option value="">{manualSel.suffixNumber ? '— Select drawing —' : '— Select suffix first —'}</option>
-              {availableDrawings.map(r => <option key={r.drawingNumber} value={r.drawingNumber}>{r.drawingNumber}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {/* Issued For */}
-        <div className="msp-field-row">
-          <label className="msp-label">Issued For</label>
-          <div className="msp-control">
-            <select
-              className="msp-select"
-              value={manualSel.issuedFor || ''}
-              onChange={e => onSelectIssuedFor(e.target.value || null)}
-            >
-              <option value="">— Select —</option>
-              {ISSUED_FOR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Revision Table Panel ──
-
-function RevisionTablePanel({
-  revision, description, expectedDate,
-  pdfId, pageIndex, onOverride, clearOverride, getOverride, failNumbers,
-  sectionKey, collapsed, toggleCollapse,
-}) {
-  const isCollapsed = collapsed[sectionKey];
-
-  const rows = [
-    { field: 'revtable-revision',    label: 'Revision',    expected: revision    || null },
-    { field: 'revtable-description', label: 'Description', expected: description || null },
-    { field: 'revtable-date',        label: 'Date',        expected: expectedDate || null },
-  ];
-
-  const summary = { pass: 0, warning: 0, fail: 0 };
-  rows.forEach(r => {
-    const s = getOverride?.(pdfId, pageIndex, r.field) || 'pass';
-    if (s in summary) summary[s]++;
-  });
-
-  return (
-    <div className="v-section">
-      <button className="v-section-header" onClick={() => toggleCollapse(sectionKey)}>
-        <div className="v-section-left">
-          <span className={`v-chevron ${isCollapsed ? 'v-chevron-closed' : ''}`}>&#9662;</span>
-          <h3 className="v-section-title">Revision Table</h3>
-        </div>
-        <div className="v-section-counts">
-          {summary.pass > 0 && <span className="sc-pass">{summary.pass} passed</span>}
-          {summary.warning > 0 && <span className="sc-warning">{summary.warning} warnings</span>}
-          {summary.fail > 0 && <span className="sc-fail">{summary.fail} failed</span>}
-        </div>
-      </button>
-      {!isCollapsed && (
-        <table className="v-table">
-          <thead>
-            <tr>
-              <th className="v-badge-col"></th>
-              <th>Field</th>
-              <th>Expected</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(r => {
-              const overrideStatus = getOverride?.(pdfId, pageIndex, r.field);
-              const effectiveStatus = overrideStatus || 'pass';
-              const isOverridden = !!overrideStatus;
-              const isIssue = effectiveStatus === 'fail' || effectiveStatus === 'warning';
-              const badgeNum = failNumbers?.[r.field];
-
-              const handleClick = (targetStatus, e) => {
-                e.stopPropagation();
-                if (targetStatus === overrideStatus) {
-                  clearOverride?.(pdfId, pageIndex, r.field);
-                } else {
-                  onOverride?.(pdfId, pageIndex, r.field, targetStatus);
-                }
-              };
-
-              return (
-                <tr key={r.field} className={`vrow vrow-${effectiveStatus}`} data-field={r.field}>
-                  <td className="v-badge-cell">
-                    {badgeNum ? <span className="fail-badge">{badgeNum}</span> : null}
-                  </td>
-                  <td className="v-field">{r.label}</td>
-                  <td className="v-value">{r.expected || <span className="v-null">—</span>}</td>
-                  <td className="v-status">
-                    <span className="status-trio">
-                      {['pass', 'warning', 'fail'].map(s => {
-                        const isActiveBtn = effectiveStatus === s;
-                        return (
-                          <button
-                            key={s}
-                            className={`status-btn status-btn-${s}${isActiveBtn ? ' status-btn-active' : ''}${isActiveBtn && isOverridden ? ' status-btn-overridden' : ''}`}
-                            onClick={(e) => handleClick(s, e)}
-                            title={isActiveBtn && isOverridden ? 'Override active — click to revert' : `Set to ${s.toUpperCase()}`}
-                          >
-                            {s === 'pass' ? 'PASS' : s === 'warning' ? 'WARN' : 'FAIL'}
-                          </button>
-                        );
-                      })}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-// ── Custom Checks section names ──
-const CUSTOM_SECTIONS = [
-  'Hardware',
-  'General Notes',
-  'Outstanding Information',
-  'Reference Drawings',
-  'Map Key',
-];
-
-// ── Custom Fields Panel ──
-
-function CustomFieldsPanel({
-  pdfId,
-  pageIndex,
-  customFields,
-  addField,
-  removeField,
-  updateField,
-  getOverride,
-  onOverride,
-  clearOverride,
-  failNumbers,
-  activeField,
-  onRowClick,
-  sectionKey,
-  collapsed,
-  toggleCollapse,
-}) {
-  const isCollapsed = collapsed[sectionKey];
-
-  const summary = { pass: 0, warning: 0, fail: 0 };
-  customFields.forEach(cf => {
-    const s = getOverride(pdfId, pageIndex, cf.id) || 'pass';
-    if (s in summary) summary[s]++;
-  });
-
-  return (
-    <div className="v-section">
-      <button className="v-section-header" onClick={() => toggleCollapse(sectionKey)}>
-        <div className="v-section-left">
-          <span className={`v-chevron ${isCollapsed ? 'v-chevron-closed' : ''}`}>&#9662;</span>
-          <h3 className="v-section-title">Custom Checks</h3>
-        </div>
-        <div className="v-section-counts">
-          {customFields.length === 0 && <span className="sc-info">No custom checks</span>}
-          {summary.pass > 0 && <span className="sc-pass">{summary.pass} passed</span>}
-          {summary.warning > 0 && <span className="sc-warning">{summary.warning} warnings</span>}
-          {summary.fail > 0 && <span className="sc-fail">{summary.fail} failed</span>}
-        </div>
-      </button>
-
-      {!isCollapsed && (
-        <table className="v-table">
-          <thead>
-            <tr>
-              <th className="v-badge-col"></th>
-              <th>Field</th>
-              <th>Expected</th>
-              <th>Result</th>
-              <th className="custom-remove-col"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {CUSTOM_SECTIONS.map(sectionName => {
-              const sectionFields = customFields.filter(cf => cf.section === sectionName);
-              return (
-                <React.Fragment key={sectionName}>
-                  <tr className="custom-section-header-row">
-                    <td colSpan={5} className="custom-section-label">{sectionName}</td>
-                  </tr>
-                  {sectionFields.map(cf => {
-                    const overrideStatus = getOverride(pdfId, pageIndex, cf.id);
-                    const effectiveStatus = overrideStatus || 'pass';
-                    const isOverridden = !!overrideStatus;
-                    const isIssue = effectiveStatus === 'fail' || effectiveStatus === 'warning';
-                    const isActive = isIssue && activeField === cf.id;
-                    const badgeNum = failNumbers?.[cf.id];
-
-                    const handleClick = (targetStatus, e) => {
-                      e.stopPropagation();
-                      if (targetStatus === overrideStatus) {
-                        clearOverride(pdfId, pageIndex, cf.id);
-                      } else {
-                        onOverride(pdfId, pageIndex, cf.id, targetStatus);
-                      }
-                    };
-
-                    return (
-                      <tr
-                        key={cf.id}
-                        className={`vrow vrow-${effectiveStatus} ${isActive ? 'vrow-active' : ''}`}
-                        data-field={cf.id}
-                        onClick={isIssue ? () => onRowClick?.(cf.id) : undefined}
-                        style={isIssue ? { cursor: 'pointer' } : undefined}
-                      >
-                        <td className="v-badge-cell">
-                          {badgeNum ? <span className="fail-badge">{badgeNum}</span> : null}
-                        </td>
-                        <td className="v-field">{sectionName}</td>
-                        <td className="v-value">
-                          <input
-                            className="custom-field-input"
-                            value={cf.expected}
-                            placeholder="Check description"
-                            onChange={e => updateField(pdfId, pageIndex, cf.id, { expected: e.target.value })}
-                            onClick={e => e.stopPropagation()}
-                          />
-                        </td>
-                        <td className="v-status">
-                          <span className="status-trio">
-                            {['pass', 'warning', 'fail'].map(s => {
-                              const isActiveBtn = effectiveStatus === s;
-                              return (
-                                <button
-                                  key={s}
-                                  className={`status-btn status-btn-${s}${isActiveBtn ? ' status-btn-active' : ''}${isActiveBtn && isOverridden ? ' status-btn-overridden' : ''}`}
-                                  onClick={(e) => handleClick(s, e)}
-                                  title={isActiveBtn && isOverridden ? 'Override active — click to revert' : `Set to ${s.toUpperCase()}`}
-                                >
-                                  {s === 'pass' ? 'PASS' : s === 'warning' ? 'WARN' : 'FAIL'}
-                                </button>
-                              );
-                            })}
-                          </span>
-                        </td>
-                        <td className="custom-remove-col">
-                          <button
-                            className="btn-icon-small btn-remove"
-                            onClick={(e) => { e.stopPropagation(); removeField(pdfId, pageIndex, cf.id); }}
-                            title="Remove this check"
-                          >
-                            &times;
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="custom-add-section-row">
-                    <td colSpan={5}>
-                      <button
-                        className="btn-custom-add-section"
-                        onClick={() => addField(pdfId, pageIndex, sectionName)}
-                      >
-                        + Add {sectionName} check
-                      </button>
-                    </td>
-                  </tr>
-                </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-export default App;
+   
