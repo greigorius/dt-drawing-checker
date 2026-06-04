@@ -23,6 +23,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/notion-drawing-by-number"
+  to   = "/.netlify/functions/notion-drawing-by-number"
+  status = 200
+
+[[redirects]]
   from = "/api/finishes-lookup"
   to   = "/.netlify/functions/finishes-lookup"
   status = 200

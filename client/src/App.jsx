@@ -802,21 +802,26 @@ function App() {
       for (const sub of submissions) {
         if (!sub.dropboxPath) continue;
         try {
-          // 3. Fetch PDF from local Dropbox
-          const pdfRes = await fetch(`/api/local-pdf?path=${encodeURIComponent(sub.dropboxPath)}`);
-          if (!pdfRes.ok) { console.warn(`[load-pending] ${sub.title}: ${pdfRes.status}`); continue; }
-
-          const blob      = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
-          const objectUrl = URL.createObjectURL(blob);
-          const loadedPdf = await pdfjsLib.getDocument(objectUrl).promise;
-          const filename  = sub.dropboxPath.split('/').pop();
-          const entryId   = makeId();
+          const filename = sub.dropboxPath.split('/').pop();
+          const entryId  = makeId();
           if (!firstId) firstId = entryId;
+
+          // 3. Try to fetch PDF from local Dropbox path
+          let loadedPdf = null;
+          const pdfRes = await fetch(`/api/local-pdf?path=${encodeURIComponent(sub.dropboxPath)}`);
+          if (pdfRes.ok) {
+            const blob      = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
+            const objectUrl = URL.createObjectURL(blob);
+            loadedPdf       = await pdfjsLib.getDocument(objectUrl).promise;
+          }
+          // If no local PDF (e.g. Netlify), still create entry so Notion data gets pre-filled
+          // User can load the PDF manually via the file picker
 
           const entry = {
             id: entryId, displayName: filename, serverFilename: filename,
-            pdfDoc: loadedPdf, totalPages: loadedPdf.numPages,
-            checked: true, expanded: true, status: 'uploaded',
+            pdfDoc: loadedPdf, totalPages: loadedPdf?.numPages ?? 0,
+            checked: !!loadedPdf, expanded: true,
+            status: loadedPdf ? 'uploaded' : 'pending-pdf',
             submissionId: sub.id, filePath: null,
             finishesRows: [], finishesError: null,
             manualProject: null,
@@ -830,58 +835,54 @@ function App() {
           setSelectedPage(0);
 
           // 4. Auto-match Notion data from submission metadata
-          const projectNo = sub.taskCode?.split('-').slice(0, 2).join('-');
-          const project   = (projects || []).find(p =>
-            (p.projectNumber && p.projectNumber.includes(projectNo)) ||
-            (p.projectName   && p.projectName.startsWith(projectNo))
-          );
+          // Match project by number extracted from path — exact boundary match only
+          const projectNo    = sub.taskCode?.split('-').slice(0, 2).join('-'); // e.g. "24-354"
+          const projectNoNum = projectNo.replace(/-/g, '');                    // e.g. "24354"
+          const project = (projects || []).find(p => {
+            // Exact match on stored project number (may be "24354" without hyphen)
+            if (p.projectNumber === projectNo || p.projectNumber === projectNoNum) return true;
+            // Match on project name: "24-354" must be followed by space, dash, or end
+            if (p.projectName) {
+              const after = p.projectName.slice(projectNo.length);
+              if (p.projectName.startsWith(projectNo) && (!after || after[0] === ' ' || after[0] === '-')) return true;
+            }
+            return false;
+          });
           if (!project) continue;
           setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, manualProject: project }));
 
-          const { suffixes = [] } = await fetch('/api/notion-suffixes-for-project', {
+          // Fetch drawing directly by drawing number — bypasses unreliable suffix matching
+          const { row: notionRow } = await fetch('/api/notion-drawing-by-number', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ projectName: project.projectName }),
-          }).then(r => r.json()).catch(() => ({ suffixes: [] }));
-
-          const itemNo = sub.taskCode?.split('-')[2] || '';
-          const suffix = suffixes.find(s => s.suffixNumber === itemNo.padStart(3, '0') || s.suffixNumber === itemNo);
-          if (!suffix) continue;
-
-          // Store the full suffix list so the dropdown has options to show
-          setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, availableProjectSuffixes: suffixes }));
+            body: JSON.stringify({ drawingNo: sub.drawingNo, projectNo }),
+          }).then(r => r.json()).catch(() => ({ row: null }));
 
           setPdfs(prev => prev.map(p => {
             if (p.id !== entryId) return p;
             const sel = [...(p.manualSelections || [])];
-            sel[0] = { ...(sel[0] || {}), suffixNumber: suffix.suffixNumber, itemPageId: suffix.itemPageId, drawingNumber: null, notionRow: null, issuedFor: sub.stage || null };
+            sel[0] = {
+              ...(sel[0] || {}),
+              suffixNumber:  notionRow?.suffixNumber || sub.taskCode?.split('-')[2] || null,
+              itemPageId:    null,
+              drawingNumber: notionRow?.drawingNumber || sub.drawingNo || null,
+              notionRow:     notionRow || null,
+              issuedFor:     sub.stage || null,
+            };
             return { ...p, manualSelections: sel };
           }));
 
-          const { rows = [] } = await fetch('/api/notion-drawings-for-project', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ itemPageId: suffix.itemPageId }),
-          }).then(r => r.json()).catch(() => ({ rows: [] }));
-
-          setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, availableProjectDrawings: rows }));
-
-          const drawing = rows.find(r => r.drawingNumber?.toLowerCase() === sub.drawingNo?.toLowerCase());
-          if (drawing) {
-            setPdfs(prev => prev.map(p => {
-              if (p.id !== entryId) return p;
-              const sel = [...(p.manualSelections || [])];
-              sel[0] = { ...(sel[0] || {}), drawingNumber: drawing.drawingNumber, notionRow: drawing };
-              return { ...p, manualSelections: sel };
-            }));
+          // Load finishes using suffix from Notion row (non-blocking)
+          const suffixForFinishes = notionRow?.suffixNumber;
+          if (suffixForFinishes) {
+            fetch('/api/finishes-lookup', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ suffixNumber: suffixForFinishes, projectPageId: project.pageId }),
+            }).then(r => r.json()).then(({ rows: fr }) => {
+              setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, finishesRows: fr || [] }));
+            }).catch(() => {
+              setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, finishesRows: [] }));
+            });
           }
-
-          fetch('/api/finishes-lookup', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ suffixNumber: suffix.suffixNumber, projectPageId: project.pageId }),
-          }).then(r => r.json()).then(({ rows: fr }) => {
-            setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, finishesRows: fr || [] }));
-          }).catch(() => {
-            setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, finishesRows: [] }));
-          });
 
         } catch (err) {
           console.warn(`[load-pending] ${sub.title}:`, err.message);
@@ -1426,22 +1427,17 @@ function App() {
               {rightPanelTab === 'page' ? (
                 <div className="details-scroll" ref={detailsScrollRef}>
 
-                  {/* ── Cascade dropdown selectors ── */}
-                  <ManualSelectionPanel
-                    pdf={selectedPdf}
-                    pageIndex={selectedPage}
-                    notionProjects={notionProjects}
-                    notionProjectsError={notionProjectsError}
-                    onSelectProject={(project) => setManualProject(selectedPdfId, project)}
-                    onSelectSuffix={(suffixNumber, itemPageId) => {
-                      setManualSuffix(selectedPdfId, selectedPage, suffixNumber, itemPageId);
-                      if (selectedPage === 0) triggerFinishesLookup(selectedPdfId, suffixNumber, selectedPdf?.manualProject?.pageId);
-                    }}
-                    onSelectDrawing={(drawingNumber, notionRow) => setManualPageSelection(selectedPdfId, selectedPage, { drawingNumber, notionRow })}
-                    onSelectIssuedFor={(issuedFor) => setManualPageSelection(selectedPdfId, selectedPage, { issuedFor })}
-                    onRefresh={() => refreshNotionData(selectedPdfId)}
-                    isRefreshing={selectedPdf?.notionRefreshing || false}
-                  />
+                  {/* ── Notion data refresh button ── */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 0 2px' }}>
+                    <button
+                      className="btn-header-action"
+                      onClick={() => refreshNotionData(selectedPdfId)}
+                      disabled={selectedPdf?.notionRefreshing || false}
+                      title="Re-fetch drawing data from Notion"
+                    >
+                      {selectedPdf?.notionRefreshing ? 'Refreshing…' : '↻ Refresh'}
+                    </button>
+                  </div>
 
                   {/* ── Project Details ── */}
                   <ValidationSection

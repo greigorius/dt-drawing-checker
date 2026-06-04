@@ -435,6 +435,38 @@ app.post('/api/notion-drawings-for-project', async (req, res) => {
   }
 });
 
+
+// ── Drawing lookup by drawing number (bypasses suffix chain) ──────────────────
+app.post('/api/notion-drawing-by-number', async (req, res) => {
+  const { drawingNo, projectNo } = req.body;
+  if (!drawingNo) return res.json({ row: null, error: 'drawingNo is required' });
+
+  const notionKey   = process.env.NOTION_API_KEY;
+  const databaseId  = process.env.NOTION_DRAWING_SCHEDULE_DB_ID;
+  if (!notionKey || !databaseId) return res.json({ row: null, error: 'Drawing Schedule not configured' });
+
+  const filter = projectNo
+    ? { and: [
+        { property: 'Drawing Number', rich_text: { equals: drawingNo } },
+        { property: 'Project', formula: { string: { contains: projectNo } } },
+      ]}
+    : { property: 'Drawing Number', rich_text: { equals: drawingNo } };
+
+  try {
+    const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${notionKey}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter, page_size: 1 }),
+    });
+    if (!response.ok) return res.json({ row: null, error: `Notion query failed (${response.status})` });
+    const data = await response.json();
+    const row  = data.results?.[0] ? mapNotionRow(data.results[0]) : null;
+    res.json({ row });
+  } catch (err) {
+    res.json({ row: null, error: err.message });
+  }
+});
+
 // ── Load Pending: proxy ADF submissions list ──────────────
 const ADF_BASE_URL = process.env.ADF_BASE_URL || 'https://axiom-drawing-flow.netlify.app';
 
