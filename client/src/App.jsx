@@ -71,7 +71,7 @@ function buildPageResults(manualProject, manualSel) {
     { field: 'drawingTitle',  label: 'Drawing Title 1',  expected: manualSel?.notionRow?.drawingTitle1        || null, status: 'pass' },
     { field: 'drawingTitle2', label: 'Drawing Title 2',  expected: manualSel?.notionRow?.drawingTitle2        || null, status: 'pass' },
     { field: 'drawingTitle3', label: 'Drawing Title 3',  expected: manualSel?.notionRow?.drawingTitle3        || null, status: 'pass' },
-    { field: 'revision',      label: 'Revision',         expected: manualSel?.notionRow?.revision             || null, status: 'pass' },
+    { field: 'revision',      label: 'Revision',         expected: manualSel?.notionRow?.revision || manualSel?.filenameRevision || null, status: 'pass' },
   ];
 
   const s3 = [
@@ -866,11 +866,12 @@ function App() {
             const sel = [...(p.manualSelections || [])];
             sel[0] = {
               ...(sel[0] || {}),
-              suffixNumber:  notionRow?.suffixNumber || sub.taskCode?.split('-')[2] || null,
-              itemPageId:    null,
-              drawingNumber: notionRow?.drawingNumber || sub.drawingNo || null,
-              notionRow:     mergedRow,
-              issuedFor:     sub.stage || null,
+              suffixNumber:     notionRow?.suffixNumber || sub.taskCode?.split('-')[2] || null,
+              itemPageId:       null,
+              drawingNumber:    notionRow?.drawingNumber || sub.drawingNo || null,
+              notionRow:        mergedRow,
+              issuedFor:        sub.stage || null,
+              filenameRevision: sub.revision || null,
             };
             return { ...p, manualSelections: sel };
           }));
