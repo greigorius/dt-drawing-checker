@@ -308,18 +308,19 @@ export default function ExportSection({
   }, [submissionId, approving]);
 
   const handleBounce = useCallback(async () => {
-    if (!submissionId || bouncing || checkedDone.length === 0) return;
+    if (!submissionId || bouncing || !submissionPdf?.pdfDoc) return;
     setBouncing(true);
     setActionResult(null);
     setProgress('Rendering pages…');
 
+    // Only process the submission PDF being viewed — same as Approve
     const EXPORT_SCALE = 150 / 72;
 
     try {
       const pdfPageData = [];
       let pageNum = 0;
 
-      for (const pdf of checkedDone) {
+      for (const pdf of [submissionPdf]) {
         for (let pi = 0; pi < pdf.totalPages; pi++) {
           pageNum++;
           setProgress(`Rendering page ${pageNum}…`);
@@ -413,7 +414,7 @@ export default function ExportSection({
       setBouncing(false);
       setProgress('');
     }
-  }, [submissionId, submissionPdf, bouncing, checkedDone, filterByOptions, getOverride, pins, finishesOverrides]);
+  }, [submissionId, submissionPdf, bouncing, filterByOptions, getOverride, pins, finishesOverrides]);
 
   const canExport = (exportPdf || exportPng) && checkedDone.length > 0;
 
@@ -722,15 +723,4 @@ export default function ExportSection({
             onClick={handleExport}
             disabled={!canExport || exporting}
           >
-            {exporting
-              ? 'Exporting\u2026'
-              : checkedDone.length === 0
-              ? 'Export'
-              : `Export (${totalPages} page${totalPages !== 1 ? 's' : ''})`}
-          </button>
-
-        </div>
-      )}
-    </div>
-  );
-}
+           
