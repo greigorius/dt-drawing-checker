@@ -665,12 +665,24 @@ function App() {
           const filename = sub.dropboxPath?.split('/').pop() || `${sub.title}.pdf`;
           const entryId  = makeId();
 
-          // 3. Download PDF via server proxy (avoids Dropbox CORS restriction)
+          // 3. Download PDF — proxy resolves share link to CDN URL (CORS-friendly)
           let loadedPdf = null;
-          const pdfRes = await fetch(`/api/proxy-pdf?url=${encodeURIComponent(sub.shareLink)}`);
-          if (pdfRes.ok) {
-            const blob = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
-            loadedPdf  = await pdfjsLib.getDocument(URL.createObjectURL(blob)).promise;
+          const proxyRes = await fetch(`/api/proxy-pdf?url=${encodeURIComponent(sub.shareLink)}`);
+          if (proxyRes.ok) {
+            const contentType = proxyRes.headers.get('content-type') || '';
+            let pdfBlob;
+            if (contentType.includes('json')) {
+              // Netlify path: got a CDN URL to fetch directly
+              const { cdnUrl } = await proxyRes.json();
+              if (cdnUrl) {
+                const cdnRes = await fetch(cdnUrl);
+                if (cdnRes.ok) pdfBlob = new Blob([await cdnRes.arrayBuffer()], { type: 'application/pdf' });
+              }
+            } else {
+              // Local Express path: got the PDF bytes directly
+              pdfBlob = new Blob([await proxyRes.arrayBuffer()], { type: 'application/pdf' });
+            }
+            if (pdfBlob) loadedPdf = await pdfjsLib.getDocument(URL.createObjectURL(pdfBlob)).promise;
           }
 
           const entry = {
