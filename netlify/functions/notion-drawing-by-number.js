@@ -59,3 +59,19 @@ export const handler = async (event) => {
       method: 'POST', headers: notionHeaders(),
       body: JSON.stringify({ filter, page_size: 1 }),
     })
+    if (!r.ok) throw Object.assign(new Error(`Notion query failed: ${r.status}`), { status: r.status })
+    const data = await r.json()
+    if (!data.results?.[0]) return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ row: null }) }
+
+    const rawRow = data.results[0]
+    const row = mapRow(rawRow)
+
+    // Resolve Person relation to a display name
+    const personRelation = rawRow.properties['Person']?.relation
+    row.assignedTo = await resolvePersonName(personRelation)
+
+    return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ row }) }
+  } catch (err) {
+    return errResponse('notion-drawing-by-number', err)
+  }
+}

@@ -30,4 +30,27 @@ if errorlevel 1 (
     exit /b 1
   )
 ) else (
-  echo No local changes to commit — pushing any unpushed commits.
+  echo No local changes to commit — pushing any unpushed commits...
+  set /p CONFIRM="Push to GitHub? (y/n): "
+  if /i not "!CONFIRM!"=="y" (
+    echo Cancelled.
+    exit /b 0
+  )
+)
+
+echo.
+echo Pushing to GitHub...
+git push origin master
+if errorlevel 1 (
+  echo Push failed. Check your network or branch name.
+  exit /b 1
+)
+
+echo.
+echo Done! Changes pushed to GitHub.
+echo.
+echo NOTE: Netlify auto-deploys on push if connected to this repo.
+echo       Check https://app.netlify.com for deploy status.
+
+endlocal
+pause
