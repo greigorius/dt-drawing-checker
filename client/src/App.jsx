@@ -715,7 +715,10 @@ function App() {
           setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, manualProject: project }));
 
           // 5. Fetch drawing data — use page ID from ADF (reliable) or fall back to drawing number filter
-          const drawingPageId = sub.drawingIds?.split(',')[0]?.trim();
+          // drawingIds can be array (ADF) or comma-separated string
+          const drawingPageId = Array.isArray(sub.drawingIds)
+            ? sub.drawingIds[0]
+            : sub.drawingIds?.split?.(',')[0]?.trim() || null;
           let notionRow = null;
           if (drawingPageId) {
             const res = await fetch(`/api/notion-drawing-by-id?id=${encodeURIComponent(drawingPageId)}`)
