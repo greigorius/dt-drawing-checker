@@ -123,6 +123,13 @@ function App() {
   // Which field is currently active
   const [activeField, setActiveField] = useState(null);
 
+  // Sketch / markup state (keyed by pdfId-pageIndex)
+  const [sketches, setSketches] = useState({});
+  const [activeTool, setActiveTool] = useState('pan');
+  const [activeColor, setActiveColor] = useState('#ef4444');
+  const [activeWidth, setActiveWidth] = useState(2);
+  const [activeFontSizeFrac, setActiveFontSizeFrac] = useState(0.025);
+
   const detailsScrollRef = useRef(null);
 
   // Collapsed sections state
