@@ -714,11 +714,21 @@ function App() {
           if (!project) continue;
           setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, manualProject: project }));
 
-          // 5. Fetch drawing data directly by drawing number
-          const { row: notionRow } = await fetch('/api/notion-drawing-by-number', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ drawingNo: sub.drawingNo, projectNo }),
-          }).then(r => r.json()).catch(() => ({ row: null }));
+          // 5. Fetch drawing data — use page ID from ADF (reliable) or fall back to drawing number filter
+          const drawingPageId = sub.drawingIds?.split(',')[0]?.trim();
+          let notionRow = null;
+          if (drawingPageId) {
+            const res = await fetch(`/api/notion-drawing-by-id?id=${encodeURIComponent(drawingPageId)}`)
+              .then(r => r.json()).catch(() => ({ row: null }));
+            notionRow = res.row;
+          }
+          if (!notionRow) {
+            const res = await fetch('/api/notion-drawing-by-number', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ drawingNo: sub.drawingNo, projectNo }),
+            }).then(r => r.json()).catch(() => ({ row: null }));
+            notionRow = res.row;
+          }
 
           const mergedRow = notionRow
             ? { ...notionRow, revision: notionRow.revision || sub.revision || null }

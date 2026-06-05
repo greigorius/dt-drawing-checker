@@ -505,6 +505,42 @@ app.get('/api/proxy-pdf', async (req, res) => {
   }
 });
 
+
+// ── Drawing lookup by Notion page ID (most reliable — uses ADF drawingIds) ────
+app.get('/api/notion-drawing-by-id', async (req, res) => {
+  const { id } = req.query;
+  if (!id) return res.json({ row: null, error: 'id is required' });
+
+  const notionKey = process.env.NOTION_API_KEY;
+  if (!notionKey) return res.json({ row: null, error: 'NOTION_API_KEY not configured' });
+
+  try {
+    const response = await fetch(`https://api.notion.com/v1/pages/${id}`, {
+      headers: { Authorization: `Bearer ${notionKey}`, 'Notion-Version': '2022-06-28' },
+    });
+    if (!response.ok) return res.json({ row: null, error: `Notion returned ${response.status}` });
+    const page = await response.json();
+    const row  = mapNotionRow(page);
+    // Resolve Person relation
+    const personIds = page.properties['Person']?.relation || [];
+    if (personIds.length) {
+      try {
+        const pr = await fetch(`https://api.notion.com/v1/pages/${personIds[0].id}`, {
+          headers: { Authorization: `Bearer ${notionKey}`, 'Notion-Version': '2022-06-28' },
+        });
+        if (pr.ok) {
+          const personPage = await pr.json();
+          const titleProp = Object.values(personPage.properties || {}).find(p => p.type === 'title');
+          row.assignedTo = titleProp?.title?.map(t => t.plain_text).join('') || null;
+        }
+      } catch { /* non-fatal */ }
+    }
+    res.json({ row });
+  } catch (err) {
+    res.json({ row: null, error: err.message });
+  }
+});
+
 // ── Load Pending: proxy ADF submissions list ──────────────
 const ADF_BASE_URL = process.env.ADF_BASE_URL || 'https://axiom-drawing-flow.netlify.app';
 
