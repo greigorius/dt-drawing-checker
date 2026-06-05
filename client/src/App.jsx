@@ -475,143 +475,6 @@ function App() {
       });
   }, []);
 
-  // ── Auto-load queued PDFs from Dropbox (pushed by Make Scenario 1) ──────────
-  useEffect(() => {
-    let cancelled = false;
-
-    async function autoMatchNotion(pdfId, filename, filePath, projects) {
-      // Parse filename: {itemNo}_{drawingNo}_{revision}_{initials}.pdf
-      const base  = filename.replace(/\.pdf$/i, '');
-      const parts = base.split('_');
-      if (parts.length < 3) return;
-      const itemNo    = parts[0];
-      const drawingNo = parts[1];
-
-      // Parse project number + stage from filePath: .../Drawing Submissions/24-367/A4.5/Pending/...
-      let projectNo = null, stage = null;
-      if (filePath) {
-        const fp   = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
-        const pidx = fp.findIndex(p => p.toLowerCase() === 'pending');
-        if (pidx >= 2) { projectNo = fp[pidx - 2]; stage = fp[pidx - 1]; }
-      }
-
-      const project = (projects || []).find(p =>
-        (p.projectNumber && p.projectNumber.includes(projectNo)) ||
-        (p.projectName   && p.projectName.startsWith(projectNo))
-      );
-      if (!project) { console.warn(`[auto-match] No project for "${projectNo}"`); return; }
-
-      if (!cancelled) setPdfs(prev => prev.map(p => p.id !== pdfId ? p : { ...p, manualProject: project }));
-
-      try {
-        const suffRes = await fetch('/api/notion-suffixes-for-project', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectName: project.projectName }),
-        });
-        const { suffixes = [] } = await suffRes.json();
-
-        const itemNoPadded = itemNo.padStart(3, '0');
-        const suffix = suffixes.find(s =>
-          s.suffixNumber === itemNoPadded || s.suffixNumber === itemNo ||
-          s.suffixNumber?.replace(/^0+/, '') === itemNo.replace(/^0+/, '')
-        );
-        if (!suffix) { console.warn(`[auto-match] No suffix for item "${itemNo}"`); return; }
-
-        if (!cancelled) setPdfs(prev => prev.map(p => {
-          if (p.id !== pdfId) return p;
-          const sel = [...(p.manualSelections || [])];
-          sel[0] = { ...(sel[0] || {}), suffixNumber: suffix.suffixNumber, itemPageId: suffix.itemPageId, drawingNumber: null, notionRow: null, issuedFor: stage || null };
-          return { ...p, manualSelections: sel };
-        }));
-
-        const drawRes = await fetch('/api/notion-drawings-for-project', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ itemPageId: suffix.itemPageId }),
-        });
-        const { rows = [] } = await drawRes.json();
-        if (!cancelled) setPdfs(prev => prev.map(p => p.id !== pdfId ? p : { ...p, availableProjectDrawings: rows }));
-
-        const drawing = rows.find(r => r.drawingNumber?.toLowerCase() === drawingNo?.toLowerCase());
-        if (!drawing) { console.warn(`[auto-match] No drawing for "${drawingNo}"`); return; }
-
-        if (!cancelled) setPdfs(prev => prev.map(p => {
-          if (p.id !== pdfId) return p;
-          const sel = [...(p.manualSelections || [])];
-          sel[0] = { ...(sel[0] || {}), drawingNumber: drawing.drawingNumber, notionRow: drawing };
-          return { ...p, manualSelections: sel };
-        }));
-
-        if (suffix.suffixNumber && !cancelled) {
-          fetch('/api/finishes-lookup', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ suffixNumber: suffix.suffixNumber, projectPageId: project.pageId }),
-          }).then(r => r.json()).then(({ rows: fr }) => {
-            if (!cancelled) setPdfs(prev => prev.map(p => p.id !== pdfId ? p : { ...p, finishesRows: fr || [] }));
-          }).catch(() => {
-            if (!cancelled) setPdfs(prev => prev.map(p => p.id !== pdfId ? p : { ...p, finishesRows: [] }));
-          });
-        }
-      } catch (err) {
-        console.warn('[auto-match] Error:', err.message);
-      }
-    }
-
-    async function loadQueued() {
-      try {
-        const res = await fetch('/api/queued-pdfs');
-        if (!res.ok || cancelled) return;
-        const { items = [] } = await res.json();
-        if (!items.length) return;
-
-        let projects = [];
-        try {
-          const pr = await fetch('/api/notion-all-projects');
-          projects = (await pr.json()).projects || [];
-          if (!cancelled) setNotionProjects(prev => prev ?? projects);
-        } catch { /* use empty */ }
-
-        for (const item of items) {
-          if (cancelled) return;
-          const { downloadUrl, filename, filePath, submissionId } = item;
-          try {
-            const pdfRes    = await fetch(downloadUrl);
-            if (!pdfRes.ok) throw new Error(`Download failed: ${pdfRes.status}`);
-            const blob      = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
-            const objectUrl = URL.createObjectURL(blob);
-            const loadedPdf = await pdfjsLib.getDocument(objectUrl).promise;
-            const entryId   = makeId();
-
-            const entry = {
-              id: entryId, displayName: filename, serverFilename: filename,
-              pdfDoc: loadedPdf, totalPages: loadedPdf.numPages,
-              checked: true, expanded: true, status: 'uploaded',
-              submissionId: submissionId || null,
-              filePath:     filePath     || null,
-              finishesRows: [], finishesError: null,
-              manualProject: null, availableProjectDrawings: null,
-              projectDrawingsLoading: false, notionRefreshing: false,
-              manualSelections: [], revisionTableDates: {}, customFields: {},
-            };
-
-            if (!cancelled) {
-              setPdfs(prev => [...prev, entry]);
-              setSelectedPdfId(prev => prev || entryId);
-              setSelectedPage(0);
-              autoMatchNotion(entryId, filename, filePath, projects);
-            }
-          } catch (err) {
-            console.warn(`[queued-pdfs] Failed to load "${filename}":`, err.message);
-          }
-        }
-      } catch (err) {
-        console.warn('[queued-pdfs] Poll failed:', err.message);
-      }
-    }
-
-    loadQueued();
-    return () => { cancelled = true; };
-  }, []); // mount only
-
   // Compute numbered pins for the current page view
   const pinsForPage = useMemo(() => {
     if (!selectedPdfId || !selectedPdf) return [];
@@ -767,25 +630,24 @@ function App() {
   const loadAllPending = useCallback(async () => {
     if (loadingPending) return;
     setLoadingPending(true);
-
-    setPendingStatus('Fetching submissions\u2026');
+    setPendingStatus('Fetching submissions…');
     try {
-      // 1. Fetch submission list
-      const subRes = await fetch('/api/scan-pending');
+      // 1. Fetch submissions from ADF (includes shareLink stored by Make on ingest)
+      const subRes = await fetch('/api/df-submissions');
       if (!subRes.ok) {
         const txt = await subRes.text().catch(() => '');
         throw new Error(`Server returned ${subRes.status}${txt ? ': ' + txt.slice(0, 100) : ''}`);
       }
       const data = await subRes.json();
       if (data.error) throw new Error(data.error);
-      const submissions = data.files || [];
+      const submissions = data.submissions || [];
       if (!submissions.length) {
-        setPendingStatus('No pending submissions found in Axiom Drawing Flow');
+        setPendingStatus('No pending submissions in Axiom Drawing Flow');
         setLoadingPending(false);
         setTimeout(() => setPendingStatus(''), 4000);
         return;
       }
-      setPendingStatus(`Loading ${submissions.length} drawing${submissions.length !== 1 ? 's' : ''}\u2026`);
+      setPendingStatus(`Loading ${submissions.length} drawing${submissions.length !== 1 ? 's' : ''}…`);
 
       // 2. Fetch Notion projects once
       let projects = notionProjects;
@@ -797,32 +659,32 @@ function App() {
         } catch { projects = []; }
       }
 
-      let firstId = null;
-
       for (const sub of submissions) {
-        if (!sub.dropboxPath) continue;
+        if (!sub.shareLink) { console.warn('[load-pending] No shareLink for', sub.title); continue; }
         try {
-          const filename = sub.dropboxPath.split('/').pop();
+          const filename = sub.dropboxPath?.split('/').pop() || `${sub.title}.pdf`;
           const entryId  = makeId();
-          if (!firstId) firstId = entryId;
 
-          // 3. Try to fetch PDF from local Dropbox path
+          // 3. Download PDF directly from Dropbox share link — works on any machine, no local path needed
           let loadedPdf = null;
-          const pdfRes = await fetch(`/api/local-pdf?path=${encodeURIComponent(sub.dropboxPath)}`);
+          const dlUrl = sub.shareLink.includes('dl=0')
+            ? sub.shareLink.replace('dl=0', 'dl=1')
+            : sub.shareLink + (sub.shareLink.includes('?') ? '&dl=1' : '?dl=1');
+          const pdfRes = await fetch(dlUrl);
           if (pdfRes.ok) {
-            const blob      = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
-            const objectUrl = URL.createObjectURL(blob);
-            loadedPdf       = await pdfjsLib.getDocument(objectUrl).promise;
+            const blob = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
+            loadedPdf  = await pdfjsLib.getDocument(URL.createObjectURL(blob)).promise;
           }
-          // If no local PDF (e.g. Netlify), still create entry so Notion data gets pre-filled
-          // User can load the PDF manually via the file picker
 
           const entry = {
             id: entryId, displayName: filename, serverFilename: filename,
             pdfDoc: loadedPdf, totalPages: loadedPdf?.numPages ?? 0,
             checked: !!loadedPdf, expanded: true,
             status: loadedPdf ? 'uploaded' : 'pending-pdf',
-            submissionId: sub.id, filePath: null, submittedDate: sub.submittedDate || null, filenameRevision: sub.revision || null,
+            submissionId:     sub.id,
+            filePath:         null,
+            submittedDate:    sub.submitted || null,
+            filenameRevision: sub.revision  || null,
             finishesRows: [], finishesError: null,
             manualProject: null,
             availableProjectSuffixes: null, projectSuffixesLoading: false,
@@ -834,16 +696,13 @@ function App() {
           setSelectedPdfId(prev => prev || entryId);
           setSelectedPage(0);
 
-          // 4. Auto-match Notion data from submission metadata
-          // Match project by number extracted from path — exact boundary match only
-          const projectNo    = sub.taskCode?.split('-').slice(0, 2).join('-'); // e.g. "24-354"
-          const projectNoNum = projectNo.replace(/-/g, '');                    // e.g. "24354"
+          // 4. Auto-match project — exact boundary check
+          const projectNo    = sub.taskCode?.split('-').slice(0, 2).join('-');
+          const projectNoNum = projectNo?.replace(/-/g, '');
           const project = (projects || []).find(p => {
-            // Exact match on stored project number (may be "24354" without hyphen)
             if (p.projectNumber === projectNo || p.projectNumber === projectNoNum) return true;
-            // Match on project name: "24-354" must be followed by space, dash, or end
             if (p.projectName) {
-              const after = p.projectName.slice(projectNo.length);
+              const after = p.projectName.slice(projectNo?.length ?? 0);
               if (p.projectName.startsWith(projectNo) && (!after || after[0] === ' ' || after[0] === '-')) return true;
             }
             return false;
@@ -851,16 +710,16 @@ function App() {
           if (!project) continue;
           setPdfs(prev => prev.map(p => p.id !== entryId ? p : { ...p, manualProject: project }));
 
-          // Fetch drawing directly by drawing number — bypasses unreliable suffix matching
+          // 5. Fetch drawing data directly by drawing number
           const { row: notionRow } = await fetch('/api/notion-drawing-by-number', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ drawingNo: sub.drawingNo, projectNo }),
           }).then(r => r.json()).catch(() => ({ row: null }));
 
-          // Merge filename revision as fallback if Notion Rev property is empty
           const mergedRow = notionRow
             ? { ...notionRow, revision: notionRow.revision || sub.revision || null }
             : null;
+
           setPdfs(prev => prev.map(p => {
             if (p.id !== entryId) return p;
             const sel = [...(p.manualSelections || [])];
@@ -876,7 +735,7 @@ function App() {
             return { ...p, manualSelections: sel };
           }));
 
-          // Load finishes using suffix from Notion row (non-blocking)
+          // 6. Finishes (non-blocking)
           const suffixForFinishes = notionRow?.suffixNumber;
           if (suffixForFinishes) {
             fetch('/api/finishes-lookup', {
@@ -891,7 +750,7 @@ function App() {
 
         } catch (err) {
           console.warn(`[load-pending] ${sub.title}:`, err.message);
-          setPendingStatus(`Error loading "${sub.title}": ${err.message}`);
+          setPendingStatus(`Error: ${err.message}`);
         }
       }
       setPendingStatus('');
