@@ -751,7 +751,10 @@ function App() {
           }
 
           const mergedRow = notionRow
-            ? { ...notionRow, revision: notionRow.revision || sub.revision || null }
+            ? { ...notionRow,
+                revision:   notionRow.revision   || sub.revision || null,
+                assignedTo: notionRow.assignedTo || sub.dtName   || null,
+              }
             : null;
 
           setPdfs(prev => prev.map(p => {
