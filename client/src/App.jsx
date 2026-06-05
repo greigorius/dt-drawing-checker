@@ -5,6 +5,8 @@ import { DEFAULT_CHECK_OPTIONS, loadCheckOptions, saveCheckOptions } from './set
 import PdfViewer from './PdfViewer';
 import ExportSection from './ExportModal';
 import './App.css';
+import DrawingToolbar from './DrawingToolbar';
+import { useSketchPaste } from './hooks/useSketchPaste';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.mjs',
