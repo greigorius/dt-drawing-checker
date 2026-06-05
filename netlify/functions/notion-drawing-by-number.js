@@ -1,7 +1,6 @@
 /**
  * POST /api/notion-drawing-by-number
  * Fetches a single drawing row from the Drawing Schedule by drawing number.
- * Bypasses the suffix chain — drawing number is known directly from filename.
  * Body: { drawingNo, projectNo }
  */
 import { corsHeaders, notionHeaders, errResponse, getNotionValue } from './_helpers.js'
@@ -17,15 +16,27 @@ function mapRow(row) {
     drawingTitle2:          getNotionValue(p['Drawing Title 2']),
     drawingTitle3:          getNotionValue(p['Drawing Title 3']),
     revision:               getNotionValue(p['Rev']),
-    assignedTo:             getNotionValue(p['Person']),
-    s4Status:               getNotionValue(p['S4 Status (LOR)']),
-    s4StatusDate:           getNotionValue(p['S4 Status Date (LOR)']),
+    assignedTo:             null, // resolved below from Person relation
+    s4Status:               getNotionValue(p['S4 Status']),
+    s4StatusDate:           getNotionValue(p['S4 Status Date']),
     s4DtDeliveryDateActual: getNotionValue(p['S4 DT Delivery Date (Actual)']),
-    s5Status:               getNotionValue(p['S5 Status (F&P)']),
-    s5StatusDate:           getNotionValue(p['S5 Status Date (F&P)']),
+    s5Status:               getNotionValue(p['S5 Status']),
+    s5StatusDate:           getNotionValue(p['S5 Status Date']),
     s5DtDeliveryDateActual: getNotionValue(p['S5 DT Delivery Date (Actual)']),
     designStage:            getNotionValue(p['Design Stage']),
   }
+}
+
+async function resolvePersonName(personRelation) {
+  const id = personRelation?.[0]?.id
+  if (!id) return null
+  try {
+    const r = await fetch(`https://api.notion.com/v1/pages/${id}`, { headers: notionHeaders() })
+    if (!r.ok) return null
+    const page = await r.json()
+    const titleProp = Object.values(page.properties || {}).find(p => p.type === 'title')
+    return titleProp?.title?.map(t => t.plain_text).join('') || null
+  } catch { return null }
 }
 
 export const handler = async (event) => {
@@ -41,7 +52,7 @@ export const handler = async (event) => {
         { property: 'Drawing Number', title: { equals: drawingNo } },
         { property: 'Project', formula: { string: { contains: projectNo } } },
       ]}
-    : { property: 'Drawing Number', rich_text: { equals: drawingNo } }
+    : { property: 'Drawing Number', title: { equals: drawingNo } }
 
   try {
     const r = await fetch(`https://api.notion.com/v1/databases/${DB}/query`, {
@@ -50,7 +61,15 @@ export const handler = async (event) => {
     })
     if (!r.ok) throw Object.assign(new Error(`Notion query failed: ${r.status}`), { status: r.status })
     const data = await r.json()
-    const row  = data.results?.[0] ? mapRow(data.results[0]) : null
+    if (!data.results?.[0]) return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ row: null }) }
+
+    const rawRow = data.results[0]
+    const row = mapRow(rawRow)
+
+    // Resolve Person relation to a display name
+    const personRelation = rawRow.properties['Person']?.relation
+    row.assignedTo = await resolvePersonName(personRelation)
+
     return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ row }) }
   } catch (err) {
     return errResponse('notion-drawing-by-number', err)
