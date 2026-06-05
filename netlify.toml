@@ -42,4 +42,5 @@
   to   = "/.netlify/functions/df-submissions"
   status = 200
 
-[build
+[build.environment]
+  NODE_VERSION = "18"
