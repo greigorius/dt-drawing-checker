@@ -38,6 +38,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/proxy-pdf"
+  to   = "/.netlify/functions/proxy-pdf"
+  status = 200
+
+[[redirects]]
   from = "/api/df-submissions"
   to   = "/.netlify/functions/df-submissions"
   status = 200

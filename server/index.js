@@ -467,6 +467,28 @@ app.post('/api/notion-drawing-by-number', async (req, res) => {
   }
 });
 
+
+// ── Proxy a Dropbox share link (bypasses CORS) ───────────────────────────────
+app.get('/api/proxy-pdf', async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: 'url is required' });
+
+  // Convert dl=0 share link to direct download
+  const dlUrl = url.includes('dl=0') ? url.replace('dl=0', 'dl=1')
+              : url.includes('?')     ? url + '&dl=1'
+              :                         url + '?dl=1';
+  try {
+    const r = await fetch(dlUrl, { redirect: 'follow' });
+    if (!r.ok) return res.status(r.status).json({ error: `Dropbox fetch failed: ${r.status}` });
+    const buffer = await r.arrayBuffer();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Load Pending: proxy ADF submissions list ──────────────
 const ADF_BASE_URL = process.env.ADF_BASE_URL || 'https://axiom-drawing-flow.netlify.app';
 

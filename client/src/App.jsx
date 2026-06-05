@@ -665,12 +665,9 @@ function App() {
           const filename = sub.dropboxPath?.split('/').pop() || `${sub.title}.pdf`;
           const entryId  = makeId();
 
-          // 3. Download PDF directly from Dropbox share link — works on any machine, no local path needed
+          // 3. Download PDF via server proxy (avoids Dropbox CORS restriction)
           let loadedPdf = null;
-          const dlUrl = sub.shareLink.includes('dl=0')
-            ? sub.shareLink.replace('dl=0', 'dl=1')
-            : sub.shareLink + (sub.shareLink.includes('?') ? '&dl=1' : '?dl=1');
-          const pdfRes = await fetch(dlUrl);
+          const pdfRes = await fetch(`/api/proxy-pdf?url=${encodeURIComponent(sub.shareLink)}`);
           if (pdfRes.ok) {
             const blob = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
             loadedPdf  = await pdfjsLib.getDocument(URL.createObjectURL(blob)).promise;
