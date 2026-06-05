@@ -15,6 +15,7 @@ function PdfViewer({
   onAddObject,
   onRemoveObject,
   onUpdateObject,
+  onZoomRegion,
   activeTool = 'pan',
   activeColor = '#ef4444',
   activeWidth = 2,
@@ -166,6 +167,7 @@ function PdfViewer({
               onAddObject={onAddObject}
               onRemoveObject={onRemoveObject}
               onUpdateObject={onUpdateObject}
+              onZoomRegion={onZoomRegion}
               activeTool={activeTool}
               activeColor={activeColor}
               activeWidth={activeWidth}

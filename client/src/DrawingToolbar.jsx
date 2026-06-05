@@ -40,6 +40,7 @@ const icons = {
   eraser:    <Icon><path d="M20 20H7L3 16l11-11 6 6-2.5 2.5"/><path d="M6.0001 11L13 18"/></Icon>,
   undo:      <Icon><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></Icon>,
   clear:     <Icon><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></Icon>,
+  zoomRegion:<Icon><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/><line x1="11" y1="8" x2="11" y2="14"/></Icon>,
 };
 
 const TOOLS = [
@@ -68,6 +69,10 @@ export default function DrawingToolbar({
   onClear,
   hasObjects,
   disabled,
+  pdfScale,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
 }) {
   const isTextActive = activeTool === 'text';
 
@@ -140,6 +145,42 @@ export default function DrawingToolbar({
           </div>
         </>
       )}
+
+      <div className="sketch-toolbar-sep" />
+
+      {/* ── Zoom controls ── */}
+      <div className="sketch-zoom-section">
+        <button
+          className="sketch-zoom-btn"
+          onClick={onZoomOut}
+          title="Zoom out"
+          disabled={disabled}
+        >−</button>
+        <span className="sketch-scale-display">
+          {pdfScale == null ? 'Fit' : `${Math.round(pdfScale * 100)}%`}
+        </span>
+        <button
+          className="sketch-zoom-btn"
+          onClick={onZoomIn}
+          title="Zoom in"
+          disabled={disabled}
+        >+</button>
+        <button
+          className="sketch-zoom-btn"
+          onClick={onZoomReset}
+          title="Reset / fit to panel"
+          disabled={disabled}
+          style={{ fontSize: '14px' }}
+        >⊡</button>
+        <button
+          className={`sketch-tool-btn${activeTool === 'zoom-region' ? ' sketch-tool-btn-active' : ''}`}
+          onClick={() => !disabled && setActiveTool('zoom-region')}
+          title="Zoom to region (drag a rectangle)"
+          disabled={disabled}
+        >
+          {icons.zoomRegion}
+        </button>
+      </div>
 
       <div className="sketch-toolbar-sep" />
 

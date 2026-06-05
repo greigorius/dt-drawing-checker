@@ -40,12 +40,4 @@ export const handler = async (event) => {
 
     const base64 = Buffer.from(buffer).toString('base64')
     return {
-      statusCode: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/pdf' },
-      body: base64,
-      isBase64Encoded: true,
-    }
-  } catch (err) {
-    return { statusCode: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ error: err.message }) }
-  }
-}
+      statusCode: 2

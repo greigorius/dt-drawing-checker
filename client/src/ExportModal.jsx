@@ -316,7 +316,8 @@ export default function ExportSection({
     setProgress('Rendering pages…');
 
     // Only process the submission PDF being viewed — same as Approve
-    const EXPORT_SCALE = 150 / 72;
+    // Lower scale (96 DPI) keeps payload under Netlify's 6 MB limit
+    const EXPORT_SCALE = 96 / 72;
 
     try {
       const pdfPageData = [];
@@ -411,6 +412,7 @@ export default function ExportSection({
         body: JSON.stringify({ annotatedPdfBase64: base64, annotatedPdfFilename: filename }),
       });
       const bounceData = await bounceRes.json().catch(() => ({}));
+      if (bounceRes.status === 413) throw new Error('Annotated PDF too large to send — try reducing pages or sketch detail.');
       if (!bounceRes.ok) throw new Error(bounceData.error || `HTTP ${bounceRes.status}`);
 
       setActionResult({ ok: true, msg: 'Bounced — annotated PDF sent to DT via email.' });

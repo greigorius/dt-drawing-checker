@@ -1047,6 +1047,14 @@ function App() {
     setSketches(prev => ({ ...prev, [key]: [] }));
   }, [selectedPdfId, selectedPage]);
 
+  const handleZoomRegion = useCallback((x1, y1, x2, y2) => {
+    const rw = Math.abs(x2 - x1);
+    const rh = Math.abs(y2 - y1);
+    if (rw < 0.02 || rh < 0.02) return;
+    setPdfScale(prev => Math.min(8, Math.max(0.3, (prev || 1) / Math.max(rw, rh))));
+    setActiveTool('pan');
+  }, []);
+
   // Wire paste -> add image object to current page
   const handleSketchPaste = useCallback((dataUrl, nw, nh) => {
     if (!selectedPdfId) return;
@@ -1249,6 +1257,28 @@ function App() {
 
         {/* ════ Centre Panel — PDF Viewer / Upload Zone ════ */}
         <section className="panel panel-viewer">
+          {/* ── Drawing toolbar — sticky full-width strip ── */}
+          <div className="viewer-toolbar-strip">
+            <DrawingToolbar
+              activeTool={activeTool}
+              setActiveTool={setActiveTool}
+              activeColor={activeColor}
+              setActiveColor={setActiveColor}
+              activeWidth={activeWidth}
+              setActiveWidth={setActiveWidth}
+              activeFontSizeFrac={activeFontSizeFrac}
+              setActiveFontSizeFrac={setActiveFontSizeFrac}
+              onUndo={handleUndoSketch}
+              onClear={handleClearSketch}
+              hasObjects={currentPageSketches.length > 0}
+              disabled={!activePdfDoc}
+              pdfScale={pdfScale}
+              onZoomIn={() => setPdfScale(prev => Math.min(8, (prev || 1) * 1.3))}
+              onZoomOut={() => setPdfScale(prev => Math.max(0.3, (prev || 1) / 1.3))}
+              onZoomReset={() => setPdfScale(null)}
+            />
+          </div>
+
           {overallStatus && (
             <div className="viewer-status-bar">
               <span className={`overall-badge overall-${overallStatus.status}`}>
@@ -1281,20 +1311,6 @@ function App() {
           <div className="viewer-body">
             {activePdfDoc ? (
               <>
-                <DrawingToolbar
-                  activeTool={activeTool}
-                  setActiveTool={setActiveTool}
-                  activeColor={activeColor}
-                  setActiveColor={setActiveColor}
-                  activeWidth={activeWidth}
-                  setActiveWidth={setActiveWidth}
-                  activeFontSizeFrac={activeFontSizeFrac}
-                  setActiveFontSizeFrac={setActiveFontSizeFrac}
-                  onUndo={handleUndoSketch}
-                  onClear={handleClearSketch}
-                  hasObjects={currentPageSketches.length > 0}
-                  disabled={!activePdfDoc}
-                />
                 <PdfViewer
                   pdfDoc={activePdfDoc}
                   pageNumber={selectedPage + 1}
@@ -1308,6 +1324,7 @@ function App() {
                   onAddObject={handleAddSketchObject}
                   onRemoveObject={handleRemoveSketchObject}
                   onUpdateObject={handleUpdateSketchObject}
+                  onZoomRegion={handleZoomRegion}
                   activeTool={activeTool}
                   activeColor={activeColor}
                   activeWidth={activeWidth}

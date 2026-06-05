@@ -242,11 +242,12 @@ function hitTest(obj, px, py, w, h) {
 // ─── Cursor per tool ──────────────────────────────────────────────────────
 export function toolCursor(tool) {
   switch (tool) {
-    case 'pan':    return 'grab';
-    case 'select': return 'default';
-    case 'text':   return 'text';
-    case 'eraser': return 'cell';
-    default:       return 'crosshair';
+    case 'pan':         return 'grab';
+    case 'select':      return 'default';
+    case 'text':        return 'text';
+    case 'eraser':      return 'cell';
+    case 'zoom-region': return 'zoom-in';
+    default:            return 'crosshair';
   }
 }
 
@@ -258,6 +259,7 @@ export default function SketchCanvas({
   onAddObject,
   onRemoveObject,
   onUpdateObject,       // (index, newObj) => void  — for move
+  onZoomRegion,         // (x1, y1, x2, y2) => void — fractional coords
   activeTool,
   activeColor,
   activeWidth,
@@ -272,8 +274,10 @@ export default function SketchCanvas({
   const dragStartObjRef   = useRef(null);   // original object before move drag
   const dragLiveObjRef    = useRef(null);   // live preview during move drag
   const cssDimsRef        = useRef({ w: 0, h: 0 });
+  const zoomDragRef       = useRef(null);  // {startFracX, startFracY} for zoom-region
 
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [zoomRect, setZoomRect]           = useState(null); // {x, y, w, h} in CSS px for preview
   const [textInput,     setTextInput]     = useState(null);
 
   // Clear selection when tool changes
@@ -362,6 +366,13 @@ export default function SketchCanvas({
     const pos = getPos(e);
     const { w, h } = cssDimsRef.current;
 
+    // ── Zoom-region ──
+    if (activeTool === 'zoom-region') {
+      zoomDragRef.current = { fracX: pos.fracX, fracY: pos.fracY };
+      canvasRef.current?.setPointerCapture(e.pointerId);
+      return;
+    }
+
     // ── Text ──
     if (activeTool === 'text') {
       setTextInput({ fracX: pos.fracX, fracY: pos.fracY });
@@ -413,6 +424,20 @@ export default function SketchCanvas({
   //  Pointer move
   // ══════════════════════════════════════════════
   const handlePointerMove = useCallback((e) => {
+    // ── Zoom-region preview ──
+    if (activeTool === 'zoom-region' && zoomDragRef.current) {
+      const pos = getPos(e);
+      const start = zoomDragRef.current;
+      const { w, h } = cssDimsRef.current;
+      setZoomRect({
+        x: Math.min(start.fracX, pos.fracX) * w,
+        y: Math.min(start.fracY, pos.fracY) * h,
+        w: Math.abs(pos.fracX - start.fracX) * w,
+        h: Math.abs(pos.fracY - start.fracY) * h,
+      });
+      return;
+    }
+
     if (!isDrawingRef.current) return;
     const pos = getPos(e);
 
@@ -441,6 +466,24 @@ export default function SketchCanvas({
   //  Pointer up
   // ══════════════════════════════════════════════
   const handlePointerUp = useCallback((e) => {
+    // ── Zoom-region commit ──
+    if (activeTool === 'zoom-region' && zoomDragRef.current) {
+      const pos = getPos(e);
+      const start = zoomDragRef.current;
+      zoomDragRef.current = null;
+      setZoomRect(null);
+      const rw = Math.abs(pos.fracX - start.fracX);
+      const rh = Math.abs(pos.fracY - start.fracY);
+      if (rw >= 0.02 && rh >= 0.02) {
+        const x1 = Math.min(start.fracX, pos.fracX);
+        const y1 = Math.min(start.fracY, pos.fracY);
+        const x2 = Math.max(start.fracX, pos.fracX);
+        const y2 = Math.max(start.fracY, pos.fracY);
+        onZoomRegion?.(x1, y1, x2, y2);
+      }
+      return;
+    }
+
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     const pos   = getPos(e);
@@ -509,7 +552,7 @@ export default function SketchCanvas({
       content, color: activeColor, fontSizeFrac: activeFontSizeFrac ?? 0.025 });
   }, [textInput, activeColor, activeFontSizeFrac, onAddObject]);
 
-  const isActive = activeTool !== 'pan';
+  const isActive = activeTool !== 'pan';  // zoom-region handled by its own pointer capture
 
   return (
     <>
@@ -527,6 +570,18 @@ export default function SketchCanvas({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
       />
+      {zoomRect && (
+        <div style={{
+          position: 'absolute',
+          left: zoomRect.x, top: zoomRect.y,
+          width: zoomRect.w, height: zoomRect.h,
+          border: '2px dashed #3b82f6',
+          background: 'rgba(59,130,246,0.08)',
+          pointerEvents: 'none',
+          zIndex: 5,
+          boxSizing: 'border-box',
+        }} />
+      )}
       {textInput && (
         <div style={{ position: 'absolute', top: `${textInput.fracY*100}%`, left: `${textInput.fracX*100}%`, zIndex: 10 }}>
           <textarea
