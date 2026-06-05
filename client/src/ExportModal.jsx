@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import JSZip from 'jszip';
 
 const ADF_BASE_URL = 'https://axiom-drawing-flow.netlify.app';
@@ -283,6 +283,13 @@ export default function ExportSection({
   const [approving, setApproving]       = useState(false);
   const [bouncing,  setBouncing]        = useState(false);
   const [actionResult, setActionResult] = useState(null); // { ok, msg }
+
+  // Reset action state when the selected submission changes
+  useEffect(() => {
+    setActionResult(null);
+    setApproving(false);
+    setBouncing(false);
+  }, [submissionId]);
 
   const handleApprove = useCallback(async () => {
     if (!submissionId || approving) return;
