@@ -659,10 +659,14 @@ function App() {
         } catch { projects = []; }
       }
 
+      // Get current filenames to avoid duplicates
+      const existingFilenames = new Set(pdfs.map(p => p.displayName));
+
       for (const sub of submissions) {
         if (!sub.shareLink) { console.warn('[load-pending] No shareLink for', sub.title); continue; }
+        const filename = sub.dropboxPath?.split('/').pop() || `${sub.title}.pdf`;
+        if (existingFilenames.has(filename)) { console.log('[load-pending] Skipping duplicate:', filename); continue; }
         try {
-          const filename = sub.dropboxPath?.split('/').pop() || `${sub.title}.pdf`;
           const entryId  = makeId();
 
           // 3. Download PDF via proxy (handles Dropbox CORS restriction)
