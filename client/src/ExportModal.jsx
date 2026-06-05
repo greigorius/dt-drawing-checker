@@ -724,13 +724,4 @@ export default function ExportSection({
           >
             {exporting
               ? 'Exporting\u2026'
-              : checkedDone.length === 0
-              ? 'Export'
-              : `Export (${totalPages} page${totalPages !== 1 ? 's' : ''})`}
-          </button>
-
-        </div>
-      )}
-    </div>
-  );
-}
+              :

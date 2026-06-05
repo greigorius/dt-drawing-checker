@@ -665,24 +665,15 @@ function App() {
           const filename = sub.dropboxPath?.split('/').pop() || `${sub.title}.pdf`;
           const entryId  = makeId();
 
-          // 3. Download PDF — proxy resolves share link to CDN URL (CORS-friendly)
+          // 3. Download PDF via proxy (handles Dropbox CORS restriction)
           let loadedPdf = null;
           const proxyRes = await fetch(`/api/proxy-pdf?url=${encodeURIComponent(sub.shareLink)}`);
-          if (proxyRes.ok) {
-            const contentType = proxyRes.headers.get('content-type') || '';
-            let pdfBlob;
-            if (contentType.includes('json')) {
-              // Netlify path: got a CDN URL to fetch directly
-              const { cdnUrl } = await proxyRes.json();
-              if (cdnUrl) {
-                const cdnRes = await fetch(cdnUrl);
-                if (cdnRes.ok) pdfBlob = new Blob([await cdnRes.arrayBuffer()], { type: 'application/pdf' });
-              }
-            } else {
-              // Local Express path: got the PDF bytes directly
-              pdfBlob = new Blob([await proxyRes.arrayBuffer()], { type: 'application/pdf' });
-            }
-            if (pdfBlob) loadedPdf = await pdfjsLib.getDocument(URL.createObjectURL(pdfBlob)).promise;
+          if (proxyRes.status === 413) {
+            // File too large for Netlify proxy — show in list without PDF, load locally
+            console.warn(`[load-pending] ${filename}: too large for web proxy, open locally`);
+          } else if (proxyRes.ok) {
+            const pdfBlob = new Blob([await proxyRes.arrayBuffer()], { type: 'application/pdf' });
+            loadedPdf = await pdfjsLib.getDocument(URL.createObjectURL(pdfBlob)).promise;
           }
 
           const entry = {
