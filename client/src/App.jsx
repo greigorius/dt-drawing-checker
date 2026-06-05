@@ -680,13 +680,20 @@ function App() {
 
           // 3. Download PDF via proxy (handles Dropbox CORS restriction)
           let loadedPdf = null;
+          let originalPdfBase64 = null;
           const proxyRes = await fetch(`/api/proxy-pdf?url=${encodeURIComponent(sub.shareLink)}`);
           if (proxyRes.status === 413) {
             // File too large for Netlify proxy — show in list without PDF, load locally
             console.warn(`[load-pending] ${filename}: too large for web proxy, open locally`);
           } else if (proxyRes.ok) {
-            const pdfBlob = new Blob([await proxyRes.arrayBuffer()], { type: 'application/pdf' });
+            const pdfArrayBuffer = await proxyRes.arrayBuffer();
+            const pdfBlob = new Blob([pdfArrayBuffer], { type: 'application/pdf' });
             loadedPdf = await pdfjsLib.getDocument(URL.createObjectURL(pdfBlob)).promise;
+            // Store as base64 for vector-based annotated PDF export on bounce
+            const arr = new Uint8Array(pdfArrayBuffer);
+            let binary = '';
+            for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i]);
+            originalPdfBase64 = btoa(binary);
           }
 
           const entry = {
@@ -695,6 +702,7 @@ function App() {
             checked: !!loadedPdf, expanded: true,
             status: loadedPdf ? 'uploaded' : 'pending-pdf',
             submissionId:     sub.id,
+            originalPdfBase64,
             filePath:         null,
             submittedDate:    sub.submitted || null,
             filenameRevision: sub.revision  || null,

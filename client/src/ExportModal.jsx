@@ -313,94 +313,71 @@ export default function ExportSection({
     if (!submissionId || bouncing || !submissionPdf?.pdfDoc) return;
     setBouncing(true);
     setActionResult(null);
-    setProgress('Rendering pages…');
-
-    // Only process the submission PDF being viewed — same as Approve
-    // Lower scale (96 DPI) keeps payload under Netlify's 6 MB limit
-    const EXPORT_SCALE = 96 / 72;
 
     try {
-      const pdfPageData = [];
-      let pageNum = 0;
-
-      for (const pdf of [submissionPdf]) {
-        for (let pi = 0; pi < pdf.totalPages; pi++) {
-          pageNum++;
-          setProgress(`Rendering page ${pageNum}…`);
-
-          const manualSel     = pdf.manualSelections?.[pi] || {};
-          const manualProject = pdf.manualProject || null;
-          const standardRows  = filterByOptions(buildPageRows(manualProject, manualSel));
-          const customRows    = (pdf.customFields?.[pi] || []).map(cf => ({
-            field: cf.id, label: cf.section || cf.label || 'Custom', expected: cf.expected || null,
-          }));
-
-          const failItems = [...standardRows, ...customRows]
-            .filter(r => getOverride?.(pdf.id, pi, r.field) === 'fail')
-            .map(r => ({ field: r.field, label: r.label, expected: r.expected || '' }));
-
-          if (pi === 0) {
-            (pdf.finishesRows || []).forEach((row, i) => {
-              if (finishesOverrides[`${pdf.id}-${i}`] === 'fail') {
-                failItems.push({
-                  field: `finishes-row-${i}`,
-                  label: `Finishes: ${row.cadRef || row.specRef || `Row ${i + 1}`}`,
-                  expected: row.finishDescription || '',
-                });
-              }
-            });
-          }
-
-          const pdfPage  = await pdf.pdfDoc.getPage(pi + 1);
-          const vp1      = pdfPage.getViewport({ scale: 1 });
-          const viewport = pdfPage.getViewport({ scale: EXPORT_SCALE });
-          const canvas   = document.createElement('canvas');
-          canvas.width   = Math.floor(viewport.width);
-          canvas.height  = Math.floor(viewport.height);
-          const ctx      = canvas.getContext('2d');
-          await pdfPage.render({ canvasContext: ctx, viewport }).promise;
-
-          // Replay sketches on export canvas (handleBounce)
-          const _bSk = (sketches || {});
-          const _bSkObjs = _bSk[pdf.id + '-' + pi] || [];
-          if (_bSkObjs.length > 0) { await replaySketchObjectsAsync(ctx, _bSkObjs, canvas.width, canvas.height); }
-
-          const pinsForPage  = pins[pdf.id]?.[pi] || {};
-          const annotations  = [];
-          const unplaced     = [];
-          failItems.forEach((fi, i) => {
-            const pin = pinsForPage[fi.field];
-            if (pin) annotations.push({ n: i + 1, x: pin.x, y: pin.y, label: fi.label, expected: fi.expected });
-            else     unplaced.push({ n: i + 1, label: fi.label, expected: fi.expected });
-          });
-
-          pdfPageData.push({
-            pngBase64:    canvas.toDataURL('image/png').split(',')[1],
-            pageWidthPt:  vp1.width,
-            pageHeightPt: vp1.height,
-            annotations,
-            unplaced,
-          });
-        }
+      // ── Vector approach: annotate the original PDF directly ──
+      // No rasterization → full quality, small file size
+      if (!submissionPdf.originalPdfBase64) {
+        throw new Error('Original PDF bytes not available — re-load from Pending.');
       }
 
-      if (pdfPageData.length === 0) throw new Error('No pages to export');
+      setProgress('Building annotation data…');
+      const pdf = submissionPdf;
+      const allAnnotations = [];
+
+      for (let pi = 0; pi < pdf.totalPages; pi++) {
+        const manualSel     = pdf.manualSelections?.[pi] || {};
+        const manualProject = pdf.manualProject || null;
+        const standardRows  = filterByOptions(buildPageRows(manualProject, manualSel));
+        const customRows    = (pdf.customFields?.[pi] || []).map(cf => ({
+          field: cf.id, label: cf.section || cf.label || 'Custom', expected: cf.expected || null,
+        }));
+        const failItems = [...standardRows, ...customRows]
+          .filter(r => getOverride?.(pdf.id, pi, r.field) === 'fail')
+          .map(r => ({ field: r.field, label: r.label, expected: r.expected || '' }));
+
+        if (pi === 0) {
+          (pdf.finishesRows || []).forEach((row, i) => {
+            if (finishesOverrides[`${pdf.id}-${i}`] === 'fail') {
+              failItems.push({ field: `finishes-row-${i}`, label: `Finishes: ${row.cadRef || row.specRef || `Row ${i+1}`}`, expected: row.finishDescription || '' });
+            }
+          });
+        }
+
+        const pinsForPage = pins[pdf.id]?.[pi] || {};
+        let n = 0;
+        failItems.forEach(fi => {
+          n++;
+          const pin = pinsForPage[fi.field];
+          allAnnotations.push({ pageIndex: pi, n, label: fi.label, expected: fi.expected, ...(pin ? { x: pin.x, y: pin.y } : {}) });
+        });
+      }
+
+      // Build sketchesByPage keyed by page index
+      const sketchesByPage = {};
+      Object.entries(sketches || {}).forEach(([key, objs]) => {
+        const match = key.match(new RegExp(`^${pdf.id}-(\\d+)$`));
+        if (match) sketchesByPage[parseInt(match[1])] = objs;
+      });
 
       setProgress('Generating annotated PDF…');
-      const pdfRes = await fetch('/api/export-pdf', {
+      const annotRes = await fetch('/api/annotate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pages: pdfPageData }),
+        body: JSON.stringify({ pdfBase64: submissionPdf.originalPdfBase64, annotations: allAnnotations, sketchesByPage }),
       });
-      if (!pdfRes.ok) throw new Error(`PDF generation failed (HTTP ${pdfRes.status})`);
-      const pdfBlob = new Blob([await pdfRes.arrayBuffer()], { type: 'application/pdf' });
+      if (!annotRes.ok) {
+        const err = await annotRes.json().catch(() => ({}));
+        throw new Error(err.error || `annotate-pdf HTTP ${annotRes.status}`);
+      }
+      const annotatedBlob = new Blob([await annotRes.arrayBuffer()], { type: 'application/pdf' });
 
       // Convert to base64 for ADF
       const base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload  = () => resolve(reader.result.split(',')[1]);
         reader.onerror = reject;
-        reader.readAsDataURL(pdfBlob);
+        reader.readAsDataURL(annotatedBlob);
       });
 
       const filename = submissionPdf?.displayName?.replace(/\.pdf$/i, '_annotated.pdf') || 'annotated.pdf';
@@ -412,10 +389,11 @@ export default function ExportSection({
         body: JSON.stringify({ annotatedPdfBase64: base64, annotatedPdfFilename: filename }),
       });
       const bounceData = await bounceRes.json().catch(() => ({}));
-      if (bounceRes.status === 413) throw new Error('Annotated PDF too large to send — try reducing pages or sketch detail.');
+      if (bounceRes.status === 413) throw new Error('Annotated PDF too large — reduce pin count or sketch density.');
       if (!bounceRes.ok) throw new Error(bounceData.error || `HTTP ${bounceRes.status}`);
 
       setActionResult({ ok: true, msg: 'Bounced — annotated PDF sent to DT via email.' });
+      if (submissionPdf?.id) setTimeout(() => onReviewed?.(submissionPdf.id), 1500);
     } catch (err) {
       console.error('Bounce error:', err);
       setActionResult({ ok: false, msg: `Bounce failed: ${err.message}` });
@@ -423,7 +401,7 @@ export default function ExportSection({
       setBouncing(false);
       setProgress('');
     }
-  }, [submissionId, submissionPdf, bouncing, filterByOptions, getOverride, pins, finishesOverrides, sketches]);
+  }, [submissionId, submissionPdf, bouncing, filterByOptions, getOverride, pins, finishesOverrides, sketches, onReviewed]);
 
   const canExport = (exportPdf || exportPng) && checkedDone.length > 0;
 

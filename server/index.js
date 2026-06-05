@@ -541,6 +541,132 @@ app.get('/api/notion-drawing-by-id', async (req, res) => {
   }
 });
 
+
+// ── Annotate PDF (vector) ─────────────────────────────────────────────────────
+// Takes the original PDF bytes + annotation data and adds vector overlays.
+// No rasterization — output is smaller and fully resolution-independent.
+app.post('/api/annotate-pdf', async (req, res) => {
+  const { pdfBase64, annotations = [], sketchesByPage = {} } = req.body;
+  if (!pdfBase64) return res.status(400).json({ error: 'pdfBase64 required' });
+
+  try {
+    const pdfBytes  = Buffer.from(pdfBase64, 'base64');
+    const pdfDoc    = await PDFDocument.load(pdfBytes);
+    const helvetica     = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const pages = pdfDoc.getPages();
+
+    const FAIL_RED   = rgb(0.86, 0.15, 0.15);
+    const LABEL_GRAY = rgb(0.42, 0.45, 0.50);
+    const WHITE      = rgb(1, 1, 1);
+    const YELLOW     = rgb(1, 0.90, 0);
+
+    for (let pi = 0; pi < pages.length; pi++) {
+      const page = pages[pi];
+      const { width: pw, height: ph } = page.getSize();
+      // pdf-lib Y=0 is bottom; canvas Y=0 is top — flip Y
+      const fy = (fracY) => ph - fracY * ph;
+      const fx = (fracX) => fracX * pw;
+
+      // ── Sketch objects ──
+      const sketches = sketchesByPage[pi] || [];
+      for (const obj of sketches) {
+        try {
+          switch (obj.type) {
+            case 'rect': {
+              const [r2,g2,b2] = hexToRgb(obj.color);
+              page.drawRectangle({
+                x: Math.min(fx(obj.x1), fx(obj.x2)),
+                y: Math.min(fy(obj.y1), fy(obj.y2)),
+                width: Math.abs(fx(obj.x2) - fx(obj.x1)),
+                height: Math.abs(fy(obj.y2) - fy(obj.y1)),
+                borderColor: rgb(r2,g2,b2), borderWidth: obj.width || 1, color: undefined,
+              });
+              break;
+            }
+            case 'highlight': {
+              page.drawRectangle({
+                x: Math.min(fx(obj.x1), fx(obj.x2)),
+                y: Math.min(fy(obj.y1), fy(obj.y2)),
+                width: Math.abs(fx(obj.x2) - fx(obj.x1)),
+                height: Math.abs(fy(obj.y2) - fy(obj.y1)),
+                color: rgb(1, 0.90, 0), opacity: 0.35,
+              });
+              break;
+            }
+            case 'line':
+            case 'arrow': {
+              const [r2,g2,b2] = hexToRgb(obj.color);
+              page.drawLine({ start: { x: fx(obj.x1), y: fy(obj.y1) }, end: { x: fx(obj.x2), y: fy(obj.y2) }, thickness: obj.width || 1, color: rgb(r2,g2,b2) });
+              break;
+            }
+            case 'ellipse': {
+              const [r2,g2,b2] = hexToRgb(obj.color);
+              page.drawEllipse({ x: fx(obj.cx), y: fy(obj.cy), xScale: obj.rx * pw, yScale: obj.ry * ph, borderColor: rgb(r2,g2,b2), borderWidth: obj.width || 1, color: undefined });
+              break;
+            }
+            case 'text': {
+              const [r2,g2,b2] = hexToRgb(obj.color);
+              const fs = Math.max(6, (obj.fontSizeFrac || 0.025) * ph);
+              page.drawText(obj.content || '', { x: fx(obj.x), y: fy(obj.y) - fs, font: helvetica, size: fs, color: rgb(r2,g2,b2) });
+              break;
+            }
+          }
+        } catch { /* skip broken sketch object */ }
+      }
+
+      // ── Pin annotations ──
+      const pageAnns = annotations.filter(a => a.pageIndex === pi);
+      const PIN_R = 8, CW = 120, CH = 24;
+      for (const ann of pageAnns) {
+        if (ann.x == null || ann.y == null) continue;
+        const px2 = fx(ann.x), py2 = fy(ann.y);
+        const cxLeft = Math.max(10, px2 - CW - 10);
+        const cyBottom = Math.max(10, py2 - CH / 2);
+        // Callout box
+        page.drawRectangle({ x: cxLeft, y: cyBottom, width: CW, height: CH, color: WHITE, borderColor: FAIL_RED, borderWidth: 1 });
+        page.drawText((ann.label || '').toUpperCase(), { x: cxLeft + 4, y: cyBottom + CH - 9, font: helvetica, size: 5, color: LABEL_GRAY });
+        page.drawText(String(ann.expected || '(none)').slice(0, 30), { x: cxLeft + 4, y: cyBottom + 4, font: helveticaBold, size: 6, color: FAIL_RED });
+        // Connector line
+        page.drawLine({ start: { x: cxLeft + CW, y: py2 }, end: { x: px2 - PIN_R, y: py2 }, thickness: 0.75, color: FAIL_RED });
+        // Pin circle
+        page.drawCircle({ x: px2, y: py2, size: PIN_R, color: FAIL_RED });
+        const nStr = String(ann.n || '');
+        const nW = helveticaBold.widthOfTextAtSize(nStr, 7);
+        page.drawText(nStr, { x: px2 - nW / 2, y: py2 - 2.5, font: helveticaBold, size: 7, color: WHITE });
+      }
+
+      // ── Unplaced pins (top-right list) ──
+      const unplaced = annotations.filter(a => a.pageIndex === pi && a.x == null);
+      const LW = 130, LH = 24, LG = 4;
+      const listX = pw - LW - 10;
+      unplaced.forEach((ann, i) => {
+        const boxY = ph - 10 - (i + 1) * (LH + LG);
+        page.drawRectangle({ x: listX, y: boxY, width: LW, height: LH, color: WHITE, borderColor: FAIL_RED, borderWidth: 1 });
+        page.drawCircle({ x: listX + 9, y: boxY + LH / 2, size: 7, color: FAIL_RED });
+        const nStr = String(ann.n || '');
+        const nW = helveticaBold.widthOfTextAtSize(nStr, 6);
+        page.drawText(nStr, { x: listX + 9 - nW / 2, y: boxY + LH / 2 - 2, font: helveticaBold, size: 6, color: WHITE });
+        page.drawText((ann.label || '').toUpperCase(), { x: listX + 20, y: boxY + LH - 9, font: helvetica, size: 5, color: LABEL_GRAY });
+        page.drawText(String(ann.expected || '(none)').slice(0, 20), { x: listX + 20, y: boxY + 4, font: helveticaBold, size: 6, color: FAIL_RED });
+      });
+    }
+
+    const outBytes = await pdfDoc.save();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.send(Buffer.from(outBytes));
+  } catch (err) {
+    console.error('[annotate-pdf]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function hexToRgb(hex) {
+  const h = (hex || '#000000').replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c=>c+c).join('') : h, 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
 // ── Load Pending: proxy ADF submissions list ──────────────
 const ADF_BASE_URL = process.env.ADF_BASE_URL || 'https://axiom-drawing-flow.netlify.app';
 
