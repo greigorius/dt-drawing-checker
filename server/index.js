@@ -134,7 +134,7 @@ function mapNotionRow(row) {
   return {
     project: getNotionValue(p['Project']),
     item: getNotionValue(p['Item']),
-    assignedTo: getNotionValue(p['Person']),
+    assignedTo: (p['Person']?.relation || []).map(r => r.id).join(',') || null,
     suffixNumber: getNotionValue(p['Suffix #']),
     drawingNumber: getNotionValue(p['Drawing Number']),
     pageDescription: getNotionValue(p['Page Description']),
@@ -142,11 +142,11 @@ function mapNotionRow(row) {
     drawingTitle2: getNotionValue(p['Drawing Title 2']),
     drawingTitle3: getNotionValue(p['Drawing Title 3']),
     revision: getNotionValue(p['Rev']),
-    s4Status: getNotionValue(p['S4 Status (LOR)']),
-    s4StatusDate: getNotionValue(p['S4 Status Date (LOR)']),
+    s4Status: getNotionValue(p['S4 Status']),
+    s4StatusDate: getNotionValue(p['S4 Status Date']),
     s4DtDeliveryDateActual: getNotionValue(p['S4 DT Delivery Date (Actual)']),
-    s5Status: getNotionValue(p['S5 Status (F&P)']),
-    s5StatusDate: getNotionValue(p['S5 Status Date (F&P)']),
+    s5Status: getNotionValue(p['S5 Status']),
+    s5StatusDate: getNotionValue(p['S5 Status Date']),
     s5DtDeliveryDateActual: getNotionValue(p['S5 DT Delivery Date (Actual)']),
     designStage: getNotionValue(p['Design Stage']),
   };
@@ -460,7 +460,23 @@ app.post('/api/notion-drawing-by-number', async (req, res) => {
     });
     if (!response.ok) return res.json({ row: null, error: `Notion query failed (${response.status})` });
     const data = await response.json();
-    const row  = data.results?.[0] ? mapNotionRow(data.results[0]) : null;
+    if (!data.results?.[0]) return res.json({ row: null });
+    const rawRow = data.results[0];
+    const row = mapNotionRow(rawRow);
+    // Resolve Person relation to a name
+    const personIds = rawRow.properties['Person']?.relation || [];
+    if (personIds.length && notionKey) {
+      try {
+        const pr = await fetch(`https://api.notion.com/v1/pages/${personIds[0].id}`, {
+          headers: { Authorization: `Bearer ${notionKey}`, 'Notion-Version': '2022-06-28' },
+        });
+        if (pr.ok) {
+          const personPage = await pr.json();
+          const titleProp = Object.values(personPage.properties || {}).find(p => p.type === 'title');
+          row.assignedTo = titleProp?.title?.map(t => t.plain_text).join('') || null;
+        }
+      } catch { /* non-fatal */ }
+    }
     res.json({ row });
   } catch (err) {
     res.json({ row: null, error: err.message });
