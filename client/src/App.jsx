@@ -994,6 +994,66 @@ function App() {
     });
   }, [selectedPdfId, selectedPage]);
 
+  // ── Sketch callbacks ──
+
+  const handleAddSketchObject = useCallback((obj) => {
+    if (!selectedPdfId) return;
+    const key = `${selectedPdfId}-${selectedPage}`;
+    setSketches(prev => ({ ...prev, [key]: [...(prev[key] || []), obj] }));
+  }, [selectedPdfId, selectedPage]);
+
+  const handleRemoveSketchObject = useCallback((index) => {
+    if (!selectedPdfId) return;
+    const key = `${selectedPdfId}-${selectedPage}`;
+    setSketches(prev => {
+      const arr = [...(prev[key] || [])];
+      arr.splice(index, 1);
+      return { ...prev, [key]: arr };
+    });
+  }, [selectedPdfId, selectedPage]);
+
+  const handleUpdateSketchObject = useCallback((index, newObj) => {
+    if (!selectedPdfId) return;
+    const key = `${selectedPdfId}-${selectedPage}`;
+    setSketches(prev => {
+      const arr = [...(prev[key] || [])];
+      arr[index] = newObj;
+      return { ...prev, [key]: arr };
+    });
+  }, [selectedPdfId, selectedPage]);
+
+  const handleUndoSketch = useCallback(() => {
+    if (!selectedPdfId) return;
+    const key = `${selectedPdfId}-${selectedPage}`;
+    setSketches(prev => {
+      const arr = [...(prev[key] || [])];
+      arr.pop();
+      return { ...prev, [key]: arr };
+    });
+  }, [selectedPdfId, selectedPage]);
+
+  const handleClearSketch = useCallback(() => {
+    if (!selectedPdfId) return;
+    const key = `${selectedPdfId}-${selectedPage}`;
+    setSketches(prev => ({ ...prev, [key]: [] }));
+  }, [selectedPdfId, selectedPage]);
+
+  // Wire paste -> add image object to current page
+  const handleSketchPaste = useCallback((dataUrl, nw, nh) => {
+    if (!selectedPdfId) return;
+    const aspect = nh / nw;
+    const w = 0.4;
+    const h = w * aspect;
+    handleAddSketchObject({ type: 'image', dataUrl, x: 0.05, y: 0.05, w, h });
+  }, [selectedPdfId, handleAddSketchObject]);
+
+  useSketchPaste(handleSketchPaste, !!selectedPdfId && activeTool !== 'pan');
+
+  const currentPageSketches = useMemo(
+    () => selectedPdfId ? (sketches[`${selectedPdfId}-${selectedPage}`] || []) : [],
+    [sketches, selectedPdfId, selectedPage]
+  );
+
   const checkedCount = pdfs.filter((p) => p.checked).length;
 
   // ═══════════════════════════════════════
@@ -1211,16 +1271,40 @@ function App() {
 
           <div className="viewer-body">
             {activePdfDoc ? (
-              <PdfViewer
-                pdfDoc={activePdfDoc}
-                pageNumber={selectedPage + 1}
-                scale={pdfScale}
-                pins={pinsForPage}
-                activeField={activeField}
-                onPinClick={handlePinClick}
-                onPinDragEnd={handlePinDragEnd}
-                onPinDelete={handlePinDelete}
-              />
+              <>
+                <DrawingToolbar
+                  activeTool={activeTool}
+                  setActiveTool={setActiveTool}
+                  activeColor={activeColor}
+                  setActiveColor={setActiveColor}
+                  activeWidth={activeWidth}
+                  setActiveWidth={setActiveWidth}
+                  activeFontSizeFrac={activeFontSizeFrac}
+                  setActiveFontSizeFrac={setActiveFontSizeFrac}
+                  onUndo={handleUndoSketch}
+                  onClear={handleClearSketch}
+                  hasObjects={currentPageSketches.length > 0}
+                  disabled={!activePdfDoc}
+                />
+                <PdfViewer
+                  pdfDoc={activePdfDoc}
+                  pageNumber={selectedPage + 1}
+                  scale={pdfScale}
+                  pins={pinsForPage}
+                  activeField={activeField}
+                  onPinClick={handlePinClick}
+                  onPinDragEnd={handlePinDragEnd}
+                  onPinDelete={handlePinDelete}
+                  sketches={currentPageSketches}
+                  onAddObject={handleAddSketchObject}
+                  onRemoveObject={handleRemoveSketchObject}
+                  onUpdateObject={handleUpdateSketchObject}
+                  activeTool={activeTool}
+                  activeColor={activeColor}
+                  activeWidth={activeWidth}
+                  activeFontSizeFrac={activeFontSizeFrac}
+                />
+              </>
             ) : (
               <div
                 className={`center-upload-zone ${dragOver ? 'drag-over' : ''}`}
@@ -1450,6 +1534,7 @@ function App() {
                     toggleCollapse={toggleCollapse}
                     pins={pins}
                     finishesOverrides={finishesOverrides}
+                    sketches={sketches}
                   />
                 </div>
               ) : (

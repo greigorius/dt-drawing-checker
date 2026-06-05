@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
+import SketchCanvas from './SketchCanvas';
 
 function PdfViewer({
   pdfDoc,
@@ -9,6 +10,15 @@ function PdfViewer({
   onPinClick,          // (field) => void
   onPinDragEnd,        // (field, x, y) => void  — x,y as fractions
   onPinDelete,         // (field) => void
+  // Sketch props
+  sketches = [],
+  onAddObject,
+  onRemoveObject,
+  onUpdateObject,
+  activeTool = 'pan',
+  activeColor = '#ef4444',
+  activeWidth = 2,
+  activeFontSizeFrac = 0.025,
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -149,20 +159,35 @@ function PdfViewer({
       >
         <canvas ref={canvasRef} className="pdf-canvas" />
         {canvasDims.width > 0 && (
-          <div className="pdf-pin-overlay">
-            {pins.map(pin => (
-              <div
-                key={pin.field}
-                className={`pdf-pin ${activeField === pin.field ? 'pdf-pin-active' : ''}`}
-                style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
-                onMouseDown={(e) => handlePinDragStart(e, pin)}
-                onClick={(e) => { e.stopPropagation(); onPinClick?.(pin.field); }}
-                onContextMenu={(e) => { e.preventDefault(); onPinDelete?.(pin.field); }}
-              >
-                {pin.number}
-              </div>
-            ))}
-          </div>
+          <>
+            {/* Sketch overlay — zIndex:2, pointer-events controlled by activeTool */}
+            <SketchCanvas
+              sketches={sketches}
+              onAddObject={onAddObject}
+              onRemoveObject={onRemoveObject}
+              onUpdateObject={onUpdateObject}
+              activeTool={activeTool}
+              activeColor={activeColor}
+              activeWidth={activeWidth}
+              activeFontSizeFrac={activeFontSizeFrac}
+              canvasDims={canvasDims}
+            />
+            {/* Pin overlay — zIndex:10, always on top */}
+            <div className="pdf-pin-overlay" style={{ zIndex: 10 }}>
+              {pins.map(pin => (
+                <div
+                  key={pin.field}
+                  className={`pdf-pin ${activeField === pin.field ? 'pdf-pin-active' : ''}`}
+                  style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
+                  onMouseDown={(e) => handlePinDragStart(e, pin)}
+                  onClick={(e) => { e.stopPropagation(); onPinClick?.(pin.field); }}
+                  onContextMenu={(e) => { e.preventDefault(); onPinDelete?.(pin.field); }}
+                >
+                  {pin.number}
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>

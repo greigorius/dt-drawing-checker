@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { replaySketchObjectsAsync } from './SketchCanvas';
 import JSZip from 'jszip';
 
 const ADF_BASE_URL = 'https://axiom-drawing-flow.netlify.app';
@@ -265,6 +266,7 @@ export default function ExportSection({
   toggleCollapse,
   pins = {},
   finishesOverrides = {},
+  sketches = {},
 }) {
   const isCollapsed = collapsed[SECTION_KEY];
 
@@ -357,6 +359,11 @@ export default function ExportSection({
           const ctx      = canvas.getContext('2d');
           await pdfPage.render({ canvasContext: ctx, viewport }).promise;
 
+          // Replay sketches on export canvas (handleBounce)
+          const _bSk = (sketches || {});
+          const _bSkObjs = _bSk[pdf.id + '-' + pi] || [];
+          if (_bSkObjs.length > 0) { await replaySketchObjectsAsync(ctx, _bSkObjs, canvas.width, canvas.height); }
+
           const pinsForPage  = pins[pdf.id]?.[pi] || {};
           const annotations  = [];
           const unplaced     = [];
@@ -414,7 +421,7 @@ export default function ExportSection({
       setBouncing(false);
       setProgress('');
     }
-  }, [submissionId, submissionPdf, bouncing, filterByOptions, getOverride, pins, finishesOverrides]);
+  }, [submissionId, submissionPdf, bouncing, filterByOptions, getOverride, pins, finishesOverrides, sketches]);
 
   const canExport = (exportPdf || exportPng) && checkedDone.length > 0;
 
@@ -518,6 +525,11 @@ export default function ExportSection({
 
           await pdfPage.render({ canvasContext: ctx, viewport }).promise;
 
+          // Replay sketches on export canvas (handleExport)
+          const _eSk = (sketches || {});
+          const _eSkObjs = _eSk[pdf.id + '-' + pi] || [];
+          if (_eSkObjs.length > 0) { await replaySketchObjectsAsync(ctx, _eSkObjs, canvas.width, canvas.height); }
+
           // ── PDF: capture clean backing image + build vector annotation data ──
           if (exportPdf) {
             const pinsForThisPage = pins[pdf.id]?.[pi] || {};
@@ -600,7 +612,7 @@ export default function ExportSection({
       setExporting(false);
       setProgress('');
     }
-  }, [canExport, checkedDone, totalPages, filterByOptions, getOverride, exportPdf, exportPng, pins, finishesOverrides]);
+  }, [canExport, checkedDone, totalPages, filterByOptions, getOverride, exportPdf, exportPng, pins, finishesOverrides, sketches]);
 
   return (
     <div className="v-section">
@@ -723,4 +735,15 @@ export default function ExportSection({
             onClick={handleExport}
             disabled={!canExport || exporting}
           >
-           
+           {exporting
+              ? 'Exporting…'
+              : checkedDone.length === 0
+              ? 'Export'
+              : `Export (${totalPages} page${totalPages !== 1 ? 's' : ''})`}
+          </button>
+
+        </div>
+      )}
+    </div>
+  );
+}
