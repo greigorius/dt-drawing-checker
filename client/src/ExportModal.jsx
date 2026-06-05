@@ -267,6 +267,7 @@ export default function ExportSection({
   pins = {},
   finishesOverrides = {},
   sketches = {},
+  onReviewed,
 }) {
   const isCollapsed = collapsed[SECTION_KEY];
 
@@ -724,6 +725,4 @@ export default function ExportSection({
 
         </div>
       )}
-    </div>
-  );
-}
+    
