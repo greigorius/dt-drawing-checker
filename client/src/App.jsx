@@ -107,6 +107,8 @@ function App() {
   const fileInputRef = useRef(null);
   const addFileInputRef = useRef(null);
   const uploadedFilesRef = useRef(new Map());
+  const viewerBodyRef = useRef(null);
+  const pendingScrollFrac = useRef(null);
 
   // PDF list drag-to-reorder state
   const [dragListItemId, setDragListItemId] = useState(null);
@@ -147,17 +149,30 @@ function App() {
   // Finishes overrides — keyed by "pdfId-rowIndex", value: 'pass' | 'warning' | 'fail'
   const [finishesOverrides, setFinishesOverrides] = useState({});
 
+  // Returns fractional coords of the centre of the currently visible viewer area
+  const getViewportCenter = useCallback(() => {
+    const el = viewerBodyRef.current;
+    if (!el) return { x: 0.50, y: 0.50 };
+    const sw = el.scrollWidth, sh = el.scrollHeight;
+    const cw = el.clientWidth,  ch = el.clientHeight;
+    if (sw <= cw && sh <= ch) return { x: 0.50, y: 0.50 }; // fit / no-scroll mode
+    const cx = (el.scrollLeft + cw / 2) / sw;
+    const cy = (el.scrollTop  + ch / 2) / sh;
+    return { x: Math.max(0.05, Math.min(0.95, cx)), y: Math.max(0.05, Math.min(0.95, cy)) };
+  }, []);
+
   const setStatusOverride = useCallback((pdfId, pageIndex, field, status) => {
     setStatusOverrides(prev => ({ ...prev, [`${pdfId}-${pageIndex}-${field}`]: status }));
-    // If overriding TO fail: ensure a pin exists at default position
+    // If overriding TO fail: place pin at centre of visible viewport (or page centre if fit mode)
     if (status === 'fail') {
+      const center = getViewportCenter();
       setPins(prev => {
         if (prev[pdfId]?.[pageIndex]?.[field]) return prev;
         const pageKey = prev[pdfId]?.[pageIndex] || {};
-        return { ...prev, [pdfId]: { ...(prev[pdfId] || {}), [pageIndex]: { ...pageKey, [field]: { x: 0.80, y: 0.50 } } } };
+        return { ...prev, [pdfId]: { ...(prev[pdfId] || {}), [pageIndex]: { ...pageKey, [field]: center } } };
       });
     }
-  }, []);
+  }, [getViewportCenter]);
 
   const clearStatusOverride = useCallback((pdfId, pageIndex, field) => {
     setStatusOverrides(prev => {
@@ -174,14 +189,15 @@ function App() {
   const setFinishesOverride = useCallback((pdfId, rowIndex, status) => {
     setFinishesOverrides(prev => ({ ...prev, [`${pdfId}-${rowIndex}`]: status }));
     if (status === 'fail') {
+      const center = getViewportCenter();
       const field = `finishes-row-${rowIndex}`;
       setPins(prev => {
         if (prev[pdfId]?.[0]?.[field]) return prev;
         const pageKey = prev[pdfId]?.[0] || {};
-        return { ...prev, [pdfId]: { ...(prev[pdfId] || {}), 0: { ...pageKey, [field]: { x: 0.80, y: Math.min(0.50 + rowIndex * 0.04, 0.97) } } } };
+        return { ...prev, [pdfId]: { ...(prev[pdfId] || {}), 0: { ...pageKey, [field]: center } } };
       });
     }
-  }, []);
+  }, [getViewportCenter]);
 
   const clearFinishesOverride = useCallback((pdfId, rowIndex) => {
     setFinishesOverrides(prev => {
@@ -1062,9 +1078,28 @@ function App() {
     const rw = Math.abs(x2 - x1);
     const rh = Math.abs(y2 - y1);
     if (rw < 0.02 || rh < 0.02) return;
+    // Store the fractional centre of the selected region so the scroll useEffect can centre on it
+    pendingScrollFrac.current = { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2 };
     setPdfScale(prev => Math.min(8, Math.max(0.3, (prev || 1) / Math.max(rw, rh))));
     setActiveTool('pan');
   }, []);
+
+  // After pdfScale changes, scroll viewer so the zoom-region centre is in the middle of the viewport
+  useEffect(() => {
+    if (!pendingScrollFrac.current) return;
+    const { cx, cy } = pendingScrollFrac.current;
+    pendingScrollFrac.current = null;
+    // Two rAF frames give React + pdf.js time to paint the new canvas size
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = viewerBodyRef.current;
+        if (!el) return;
+        const left = cx * el.scrollWidth  - el.clientWidth  / 2;
+        const top  = cy * el.scrollHeight - el.clientHeight / 2;
+        el.scrollTo({ left: Math.max(0, left), top: Math.max(0, top), behavior: 'smooth' });
+      });
+    });
+  }, [pdfScale]);
 
   // Wire paste -> add image object to current page
   const handleSketchPaste = useCallback((dataUrl, nw, nh) => {
@@ -1319,7 +1354,7 @@ function App() {
             </div>
           )}
 
-          <div className="viewer-body">
+          <div className="viewer-body" ref={viewerBodyRef}>
             {activePdfDoc ? (
               <>
                 <PdfViewer
