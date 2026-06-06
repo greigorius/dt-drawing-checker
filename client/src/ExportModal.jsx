@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { replaySketchObjectsAsync } from './SketchCanvas';
 import JSZip from 'jszip';
+import { annotateSinglePage } from './utils/annotatePdf';
 
 const ADF_BASE_URL = 'https://axiom-drawing-flow.netlify.app';
 
@@ -260,6 +261,7 @@ const SECTION_KEY = 'export-markups';
 export default function ExportSection({
   pdfs,
   selectedPdfId,
+  selectedPage = 0,
   filterByOptions,
   getOverride,
   collapsed,
@@ -316,72 +318,52 @@ export default function ExportSection({
     setActionResult(null);
 
     try {
-      // ── Vector approach: annotate the original PDF directly ──
-      // No rasterization → full quality, small file size
       if (!submissionPdf.originalPdfBase64) {
         throw new Error('Original PDF bytes not available — re-load from Pending.');
       }
 
       setProgress('Building annotation data…');
       const pdf = submissionPdf;
-      const allAnnotations = [];
+      const pi  = selectedPage; // annotate only the currently visible page
 
-      for (let pi = 0; pi < pdf.totalPages; pi++) {
-        const manualSel     = pdf.manualSelections?.[pi] || {};
-        const manualProject = pdf.manualProject || null;
-        const standardRows  = filterByOptions(buildPageRows(manualProject, manualSel));
-        const customRows    = (pdf.customFields?.[pi] || []).map(cf => ({
-          field: cf.id, label: cf.section || cf.label || 'Custom', expected: cf.expected || null,
-        }));
-        const failItems = [...standardRows, ...customRows]
-          .filter(r => getOverride?.(pdf.id, pi, r.field) === 'fail')
-          .map(r => ({ field: r.field, label: r.label, expected: r.expected || '' }));
+      const manualSel     = pdf.manualSelections?.[pi] || {};
+      const manualProject = pdf.manualProject || null;
+      const standardRows  = filterByOptions(buildPageRows(manualProject, manualSel));
+      const customRows    = (pdf.customFields?.[pi] || []).map(cf => ({
+        field: cf.id, label: cf.section || cf.label || 'Custom', expected: cf.expected || null,
+      }));
+      const failItems = [...standardRows, ...customRows]
+        .filter(r => getOverride?.(pdf.id, pi, r.field) === 'fail')
+        .map(r => ({ field: r.field, label: r.label, expected: r.expected || '' }));
 
-        if (pi === 0) {
-          (pdf.finishesRows || []).forEach((row, i) => {
-            if (finishesOverrides[`${pdf.id}-${i}`] === 'fail') {
-              failItems.push({ field: `finishes-row-${i}`, label: `Finishes: ${row.cadRef || row.specRef || `Row ${i+1}`}`, expected: row.finishDescription || '' });
-            }
-          });
-        }
-
-        const pinsForPage = pins[pdf.id]?.[pi] || {};
-        let n = 0;
-        failItems.forEach(fi => {
-          n++;
-          const pin = pinsForPage[fi.field];
-          allAnnotations.push({ pageIndex: pi, n, label: fi.label, expected: fi.expected, ...(pin ? { x: pin.x, y: pin.y } : {}) });
+      // Include finishes fails (always on page 0)
+      if (pi === 0) {
+        (pdf.finishesRows || []).forEach((row, i) => {
+          if (finishesOverrides[`${pdf.id}-${i}`] === 'fail') {
+            failItems.push({ field: `finishes-row-${i}`, label: `Finishes: ${row.cadRef || row.specRef || `Row ${i + 1}`}`, expected: row.finishDescription || '' });
+          }
         });
       }
 
-      // Build sketchesByPage keyed by page index
-      const sketchesByPage = {};
-      Object.entries(sketches || {}).forEach(([key, objs]) => {
-        const match = key.match(new RegExp(`^${pdf.id}-(\\d+)$`));
-        if (match) sketchesByPage[parseInt(match[1])] = objs;
+      const pinsForPage = pins[pdf.id]?.[pi] || {};
+      const annotations = failItems.map((fi, idx) => {
+        const pin = pinsForPage[fi.field];
+        return { n: idx + 1, label: fi.label, expected: fi.expected, ...(pin ? { x: pin.x, y: pin.y } : {}) };
       });
 
-      setProgress('Generating annotated PDF…');
-      const annotRes = await fetch('/api/annotate-pdf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pdfBase64: submissionPdf.originalPdfBase64, annotations: allAnnotations, sketchesByPage }),
-      });
-      if (!annotRes.ok) {
-        const err = await annotRes.json().catch(() => ({}));
-        throw new Error(err.error || `annotate-pdf HTTP ${annotRes.status}`);
-      }
-      const annotatedBlob = new Blob([await annotRes.arrayBuffer()], { type: 'application/pdf' });
+      const sketchObjects = (sketches || {})[`${pdf.id}-${pi}`] || [];
 
-      // Convert to base64 for ADF
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload  = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(annotatedBlob);
+      setProgress('Annotating PDF in browser…');
+      // Annotate entirely in the browser — no server call, no payload size limit
+      const base64 = await annotateSinglePage({
+        pdfBase64:    submissionPdf.originalPdfBase64,
+        pageIndex:    pi,
+        annotations,
+        sketchObjects,
       });
 
-      const filename = submissionPdf?.displayName?.replace(/\.pdf$/i, '_annotated.pdf') || 'annotated.pdf';
+      const pageLabel = pdf.totalPages > 1 ? `_p${pi + 1}` : '';
+      const filename  = submissionPdf?.displayName?.replace(/\.pdf$/i, `${pageLabel}_annotated.pdf`) || 'annotated.pdf';
 
       setProgress('Sending to Axiom Drawing Flow…');
       const bounceRes = await fetch(`${ADF_BASE_URL}/api/df/submissions/${submissionId}/bounce`, {
@@ -402,7 +384,7 @@ export default function ExportSection({
       setBouncing(false);
       setProgress('');
     }
-  }, [submissionId, submissionPdf, bouncing, filterByOptions, getOverride, pins, finishesOverrides, sketches, onReviewed]);
+  }, [submissionId, submissionPdf, selectedPage, bouncing, filterByOptions, getOverride, pins, finishesOverrides, sketches, onReviewed]);
 
   const canExport = (exportPdf || exportPng) && checkedDone.length > 0;
 
