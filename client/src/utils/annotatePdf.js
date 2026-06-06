@@ -92,6 +92,19 @@ export async function annotateSinglePage({ pdfBase64, pageIndex, annotations = [
           });
           break;
         }
+        case 'stroke': {
+          if (!obj.points?.length || obj.points.length < 2) break;
+          const [r, g, b] = hexToRgb(obj.color);
+          for (let i = 0; i < obj.points.length - 1; i++) {
+            page.drawLine({
+              start: { x: fx(obj.points[i].x),     y: fy(obj.points[i].y) },
+              end:   { x: fx(obj.points[i + 1].x), y: fy(obj.points[i + 1].y) },
+              thickness: obj.width || 1,
+              color: rgb(r, g, b),
+            });
+          }
+          break;
+        }
         default: break;
       }
     } catch { /* skip malformed objects */ }

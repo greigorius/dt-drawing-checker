@@ -305,12 +305,13 @@ export default function ExportSection({
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       setActionResult({ ok: true, msg: 'Approved — DT notified to produce final PDF + DWG.' });
+      if (submissionPdf?.id) setTimeout(() => onReviewed?.(submissionPdf.id), 1500);
     } catch (err) {
       setActionResult({ ok: false, msg: `Approve failed: ${err.message}` });
     } finally {
       setApproving(false);
     }
-  }, [submissionId, approving]);
+  }, [submissionId, approving, submissionPdf, onReviewed]);
 
   const handleBounce = useCallback(async () => {
     if (!submissionId || bouncing || !submissionPdf?.pdfDoc) return;
@@ -353,7 +354,7 @@ export default function ExportSection({
 
       const sketchObjects = (sketches || {})[`${pdf.id}-${pi}`] || [];
 
-      setProgress('Annotating PDF in browser…');
+      setProgress(`Annotating PDF (${annotations.length} pin${annotations.length !== 1 ? 's' : ''}, ${sketchObjects.length} sketch${sketchObjects.length !== 1 ? 'es' : ''})…`);
       // Annotate entirely in the browser — no server call, no payload size limit
       const base64 = await annotateSinglePage({
         pdfBase64:    submissionPdf.originalPdfBase64,
@@ -362,18 +363,69 @@ export default function ExportSection({
         sketchObjects,
       });
 
-      const pageLabel = pdf.totalPages > 1 ? `_p${pi + 1}` : '';
-      const filename  = submissionPdf?.displayName?.replace(/\.pdf$/i, `${pageLabel}_annotated.pdf`) || 'annotated.pdf';
+      const filename  = submissionPdf?.displayName || 'drawing.pdf';
 
-      setProgress('Sending to Axiom Drawing Flow…');
+      // ── Resolve final Dropbox destination (R{n}/ folder) before uploading ──
+      setProgress('Getting bounce destination…');
+      const destRes = await fetch(`${ADF_BASE_URL}/api/df/submissions/${submissionId}/bounce-dest`);
+      const destData = await destRes.json().catch(() => ({}));
+      if (!destRes.ok) throw new Error(destData.error || 'Could not get bounce destination');
+      const finalDropboxPath = `${destData.dropboxMove.toFolder}/${filename}`;
+
+      // ── Upload annotated PDF directly to R{n}/ in 4 MB chunks ──
+      const CHUNK = 4 * 1024 * 1024; // 4 MB per chunk
+      const pdfBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const total = pdfBytes.length;
+
+      setProgress('Starting Dropbox upload…');
+      const startRes = await fetch('/api/dropbox-upload', {
+        method: 'POST', headers: { 'X-Upload-Op': 'start' },
+      });
+      if (!startRes.ok) throw new Error(`Dropbox session start failed (${startRes.status})`);
+      const { sessionId: dbxSession } = await startRes.json();
+
+      let offset = 0;
+      while (offset < total) {
+        const end   = Math.min(offset + CHUNK, total);
+        const chunk = pdfBytes.slice(offset, end);
+        setProgress(`Uploading to Dropbox ${Math.round(end / total * 100)}%…`);
+        const appendRes = await fetch('/api/dropbox-upload', {
+          method: 'POST',
+          headers: {
+            'X-Upload-Op':  'append',
+            'X-Session-Id': dbxSession,
+            'X-Offset':     String(offset),
+            'Content-Type': 'application/octet-stream',
+          },
+          body: chunk,
+        });
+        if (!appendRes.ok) {
+          const e = await appendRes.json().catch(() => ({}));
+          throw new Error(`Upload failed at ${offset} bytes: ${e.error || appendRes.status}`);
+        }
+        offset = end;
+      }
+
+      setProgress('Finalising Dropbox upload…');
+      const finishRes = await fetch('/api/dropbox-upload', {
+        method: 'POST',
+        headers: { 'X-Upload-Op': 'finish', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: dbxSession, offset: total, dropboxPath: finalDropboxPath }),
+      });
+      if (!finishRes.ok) {
+        const e = await finishRes.json().catch(() => ({}));
+        throw new Error(`Dropbox finish failed: ${e.error || finishRes.status}`);
+      }
+
+      // ── Notify ADF — just the path, no PDF bytes ──
+      setProgress('Notifying Axiom Drawing Flow…');
       const bounceRes = await fetch(`${ADF_BASE_URL}/api/df/submissions/${submissionId}/bounce`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotatedPdfBase64: base64, annotatedPdfFilename: filename }),
+        body: JSON.stringify({ annotatedPdfFilename: filename }),
       });
       const bounceData = await bounceRes.json().catch(() => ({}));
-      if (bounceRes.status === 413) throw new Error('Annotated PDF too large — reduce pin count or sketch density.');
-      if (!bounceRes.ok) throw new Error(bounceData.error || `HTTP ${bounceRes.status}`);
+      if (!bounceRes.ok) throw new Error(bounceData.error || `ADF HTTP ${bounceRes.status}`);
 
       setActionResult({ ok: true, msg: 'Bounced — annotated PDF sent to DT via email.' });
       if (submissionPdf?.id) setTimeout(() => onReviewed?.(submissionPdf.id), 1500);

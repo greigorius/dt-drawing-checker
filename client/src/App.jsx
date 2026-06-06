@@ -1600,6 +1600,7 @@ function App() {
                   <ExportSection
                     pdfs={pdfs}
                     selectedPdfId={selectedPdfId}
+                    selectedPage={selectedPage}
                     filterByOptions={filterByOptions}
                     getOverride={getStatusOverride}
                     collapsed={collapsed}
@@ -1607,6 +1608,7 @@ function App() {
                     pins={pins}
                     finishesOverrides={finishesOverrides}
                     sketches={sketches}
+                    onReviewed={removePdf}
                   />
                 </div>
               ) : (

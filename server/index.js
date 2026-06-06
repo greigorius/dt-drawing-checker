@@ -773,6 +773,109 @@ app.get('/api/scan-pending', (req, res) => {
   }
 });
 
+// ── Dropbox chunked upload proxy ────────────────────────────────────────────
+// Three-step session upload: start → append (×N) → finish
+// Op selected by X-Upload-Op header. No PDF bytes ever sent to ADF or Make.
+
+const DROPBOX_API = 'https://content.dropboxapi.com/2/files';
+
+// ── Auto-refreshing token (uses refresh_token if set, falls back to static token) ──
+let _dbxToken = null;
+let _dbxTokenExpiry = 0;
+
+async function getDropboxToken() {
+  const refreshToken = process.env.DROPBOX_REFRESH_TOKEN;
+  if (!refreshToken) {
+    // Legacy: static access token (expires every 4h — set DROPBOX_REFRESH_TOKEN to fix)
+    return process.env.DROPBOX_ACCESS_TOKEN || null;
+  }
+  const now = Date.now();
+  if (_dbxToken && now < _dbxTokenExpiry - 300_000) return _dbxToken; // cached, 5-min buffer
+  const appKey    = process.env.DROPBOX_APP_KEY;
+  const appSecret = process.env.DROPBOX_APP_SECRET;
+  if (!appKey || !appSecret) throw new Error('DROPBOX_APP_KEY / DROPBOX_APP_SECRET not set');
+  const r = await fetch('https://api.dropboxapi.com/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: appKey, client_secret: appSecret }),
+  });
+  if (!r.ok) throw new Error(`Dropbox token refresh failed: ${r.status}`);
+  const d = await r.json();
+  _dbxToken       = d.access_token;
+  _dbxTokenExpiry = now + d.expires_in * 1000;
+  console.log('[dropbox] Token refreshed, expires in', Math.round(d.expires_in / 60), 'min');
+  return _dbxToken;
+}
+
+async function dropboxReq(path, apiArg, body, token) {
+  const r = await fetch(`${DROPBOX_API}${path}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Dropbox-API-Arg': JSON.stringify(apiArg),
+      'Content-Type': 'application/octet-stream',
+    },
+    body,
+  });
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data };
+}
+
+app.post('/api/dropbox-upload', async (req, res, next) => {
+  let token;
+  try { token = await getDropboxToken(); } catch (e) { return res.status(503).json({ error: e.message }); }
+  if (!token) return res.status(503).json({ error: 'Dropbox token not configured (set DROPBOX_REFRESH_TOKEN or DROPBOX_ACCESS_TOKEN)' });
+
+  const op = (req.headers['x-upload-op'] || '').toLowerCase();
+
+  if (op === 'start') {
+    const { ok, data } = await dropboxReq('/upload_session/start', { close: false }, '', token);
+    if (!ok) return res.status(502).json({ error: data.error_summary || 'Dropbox start failed' });
+    return res.json({ sessionId: data.session_id });
+  }
+
+  if (op === 'finish') {
+    const { sessionId, offset, dropboxPath } = req.body;
+    if (!sessionId || !dropboxPath) return res.status(400).json({ error: 'sessionId and dropboxPath required' });
+    const { ok, data } = await dropboxReq(
+      '/upload_session/finish',
+      { cursor: { session_id: sessionId, offset: offset || 0 }, commit: { path: dropboxPath, mode: 'overwrite', autorename: false } },
+      '',
+      token
+    );
+    if (!ok) return res.status(502).json({ error: data.error_summary || 'Finish failed' });
+    return res.json({ ok: true, dropboxPath: data.path_display });
+  }
+
+  // Append — binary body, bypass JSON middleware via raw handler
+  next();
+}, (err, req, res, next) => next(err));  // placeholder; append handled below
+
+app.post('/api/dropbox-upload',
+  express.raw({ limit: '5mb', type: 'application/octet-stream' }),
+  async (req, res) => {
+    let token;
+    try { token = await getDropboxToken(); } catch (e) { return res.status(503).json({ error: e.message }); }
+    if (!token) return res.status(503).json({ error: 'Dropbox token not configured' });
+
+    const op = (req.headers['x-upload-op'] || '').toLowerCase();
+    if (op !== 'append') return res.status(400).json({ error: `Unknown op: ${op}` });
+
+    const sessionId = req.headers['x-session-id'];
+    const offset    = parseInt(req.headers['x-offset'] || '0', 10);
+    if (!sessionId) return res.status(400).json({ error: 'X-Session-Id required' });
+
+    const { ok, data } = await dropboxReq(
+      '/upload_session/append_v2',
+      { cursor: { session_id: sessionId, offset }, close: false },
+      req.body,
+      token
+    );
+    if (!ok) return res.status(502).json({ error: data.error_summary || 'Append failed' });
+    res.json({ ok: true });
+  }
+);
+
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
